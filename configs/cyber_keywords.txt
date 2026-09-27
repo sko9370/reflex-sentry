@@ -56,7 +56,7 @@ infostealer
 weak:backdoor  # judgment call: also common as "backdoor deal/route" outside security
 webshell
 web shell
-c2
+weak:c2  # weak: also chemistry, CEFR level, car models; tool phrases below stay strong
 c2 server
 c2 infrastructure
 command and control server
@@ -419,11 +419,11 @@ amsi bypass
 
 # --- defensive / detection / IR (kept for hard negatives and dual-use terms) ---------
 detection rule
-sigma
+weak:sigma  # weak: also statistics, 'sigma male'; tool phrases below stay strong
 sigma rule
 yara
 yara rule
-snort
+weak:snort  # weak: also snorting drugs; tool phrases below stay strong
 snort rule
 suricata
 suricata rule
@@ -482,7 +482,7 @@ reverse engineering a sample
 static analysis of a binary
 dynamic malware analysis
 sandbox report
-volatility
+weak:volatility  # weak: also market volatility; tool phrases below stay strong
 incident response
 incident response plan
 incident response playbook
@@ -540,7 +540,7 @@ nmap
 metasploit
 mimikatz
 cobalt strike
-burp
+weak:burp  # weak: also burping; tool phrases below stay strong
 burp suite
 wireshark
 nessus
@@ -555,7 +555,12 @@ empire c2
 covenant c2
 bloodhound
 bloodhound ad
-responder
+weak:responder  # weak: also 'first responder'; tool phrases below stay strong
+responder llmnr
+llmnr poisoning
+volatility framework
+volatility 3
+memory forensics
 impacket
 netcat reverse shell
 ncat
@@ -564,7 +569,7 @@ dirbuster
 shodan search
 censys search
 maltego
-kali
+weak:kali  # weak: also the goddess, a name; tool phrases below stay strong
 kali linux
 metasploitable
 metasploitable2
@@ -642,7 +647,8 @@ re:password (?:to|for) (?:someone|somebody|their|his|her)
 re:get into (?:someone'?s|their|his|her|my \w+'s) (?:email|account|phone|computer)
 re:spy on .{0,30}(?:phone|texts|messages|computer|email)
 re:track (?:someone'?s|their|his|her|my \w+'s) (?:phone|location)
-re:steal (?:(?:someone'?s|their|his|her) )?(?:password|identity|data|account|credit card)
+re:steal (?:(?:someone'?s|their|his|her) )?(?:password|passwords|data|account|accounts|identity)
+weak:re:steal (?:(?:someone'?s|their|his|her) )?credit cards?  # weak: often offline fraud
 weak:credit card numbers  # weak: also comes up in ordinary fraud/finance-safety talk
 make a virus
 
