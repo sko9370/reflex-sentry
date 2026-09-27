@@ -17,7 +17,7 @@ it merges gold labels back in. Pass ``--no-blind`` for a debugging/audit
 sample that keeps that metadata visible.
 
     python -m reflex_sentry.gold.sample --pool data/processed/val_pool.parquet \
-        --split val --n 450 --out data/gold/samples/val_sample.parquet
+        --split val --out data/gold/samples/val_sample.parquet
 """
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DEFAULT_N = 450
+# Per-split gold set sizes chosen 2026-09-27 (docs/PLAN.md).
+DEFAULT_N = {"val": 300, "test": 300, "test_ood": 200}
 DEFAULT_SEED = 1337
 
 
@@ -122,9 +123,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pool", required=True, help="candidate pool parquet/csv")
     ap.add_argument("--split", required=True, choices=["val", "test", "test_ood"])
-    ap.add_argument("--n", type=int, default=DEFAULT_N,
-                    help=f"items to draw before out_of_scope drops (default {DEFAULT_N}, "
-                         "targets a 300-500 final gold set)")
+    ap.add_argument("--n", type=int, default=None,
+                    help=f"items to draw before out_of_scope drops (default per split: {DEFAULT_N})")
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
     ap.add_argument("--pass", dest="sample_pass", type=int, default=1, choices=[1, 2])
     ap.add_argument("--no-dedup", action="store_true", help="skip dup_group deduplication")
@@ -133,7 +133,7 @@ def main() -> None:
     a = ap.parse_args()
 
     pool = read_any(a.pool)
-    sample = draw_sample(pool, a.n, a.seed, dedup=not a.no_dedup)
+    sample = draw_sample(pool, a.n or DEFAULT_N[a.split], a.seed, dedup=not a.no_dedup)
     out = to_labeling_columns(sample, a.split, a.sample_pass, blind=not a.no_blind)
     write_any(out, a.out)
     print(f"drew {len(out)}/{len(pool)} rows (seed={a.seed}, blind={not a.no_blind}) -> {a.out}")
