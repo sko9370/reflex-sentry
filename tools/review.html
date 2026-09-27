@@ -1,0 +1,1284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold Review</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --fg: #14161a;
+    --muted: #565c66;
+    --border: #cfd4dc;
+    --accent: #1957c2;
+    --accent-fg: #ffffff;
+    --danger: #9a1f1f;
+    --danger-bg: #fdeaea;
+    --safe: #146c2e;
+    --safe-bg: #e9f7ee;
+    --ambiguous: #8a5a00;
+    --ambiguous-bg: #fdf3df;
+    --oos: #4a4f58;
+    --oos-bg: #eceef1;
+    --chip-bg: #eef1f6;
+    --chip-selected-bg: #1957c2;
+    --chip-selected-fg: #ffffff;
+    --focus-ring: #1957c2;
+    --banner-bg: #fff6da;
+    --banner-border: #d8bd52;
+    --scrollbar: #b9c0cc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a;
+      --card-bg: #1d2027;
+      --fg: #eceef2;
+      --muted: #a7adb8;
+      --border: #3a3f4a;
+      --accent: #6fa2ff;
+      --accent-fg: #08101f;
+      --danger: #ff9a9a;
+      --danger-bg: #3a1717;
+      --safe: #8fe0a8;
+      --safe-bg: #133821;
+      --ambiguous: #f0c674;
+      --ambiguous-bg: #3a2e0d;
+      --oos: #c7ccd6;
+      --oos-bg: #2a2d34;
+      --chip-bg: #262a33;
+      --chip-selected-bg: #6fa2ff;
+      --chip-selected-fg: #08101f;
+      --focus-ring: #9cc3ff;
+      --banner-bg: #3a3212;
+      --banner-border: #8a7524;
+      --scrollbar: #454b57;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a;
+    --card-bg: #1d2027;
+    --fg: #eceef2;
+    --muted: #a7adb8;
+    --border: #3a3f4a;
+    --accent: #6fa2ff;
+    --accent-fg: #08101f;
+    --danger: #ff9a9a;
+    --danger-bg: #3a1717;
+    --safe: #8fe0a8;
+    --safe-bg: #133821;
+    --ambiguous: #f0c674;
+    --ambiguous-bg: #3a2e0d;
+    --oos: #c7ccd6;
+    --oos-bg: #2a2d34;
+    --chip-bg: #262a33;
+    --chip-selected-bg: #6fa2ff;
+    --chip-selected-fg: #08101f;
+    --focus-ring: #9cc3ff;
+    --banner-bg: #3a3212;
+    --banner-border: #8a7524;
+    --scrollbar: #454b57;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+  a { color: var(--accent); }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  #app {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 12px 16px 48px;
+  }
+  #topbar {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    padding: 10px 0 10px;
+    border-bottom: 1px solid var(--border);
+    z-index: 5;
+  }
+  .topbar-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .topbar-row:last-child { margin-bottom: 0; }
+  #fileName { font-weight: 600; }
+  #fileInputLabel {
+    display: inline-block;
+    padding: 6px 12px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #fileInputLabel:focus-within { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+  #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  button {
+    font: inherit;
+    cursor: pointer;
+    color: var(--fg);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+  #exportBtn, #restoreBtn { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .filters label { display: inline-flex; align-items: center; gap: 4px; color: var(--fg); }
+  #searchId {
+    font: inherit;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--fg);
+    width: 140px;
+  }
+  .progress-summary { font-size: 13px; color: var(--muted); }
+  .progress-summary strong { color: var(--fg); }
+  #groupProgress { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); }
+  #groupProgress span.chip-count {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--chip-bg);
+    border: 1px solid var(--border);
+  }
+
+  #dropZone {
+    margin-top: 40px;
+    padding: 60px 20px;
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    text-align: center;
+    color: var(--muted);
+  }
+  #dropZone.dragover { border-color: var(--accent); color: var(--accent); background: var(--chip-bg); }
+
+  #itemContainer { display: none; margin-top: 16px; }
+  #itemContainer.visible { display: block; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  #promptText {
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 15.5px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 46vh;
+    overflow-y: auto;
+    margin: 0 0 8px;
+    padding: 4px 2px;
+    scrollbar-color: var(--scrollbar) transparent;
+  }
+  #showAllBtn { font-size: 12px; }
+
+  .meta-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 10px 0 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .meta-line .meta-item strong { color: var(--fg); }
+  .badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .badge-unlabeled { background: var(--oos-bg); color: var(--oos); }
+  .badge-single_pass { background: var(--ambiguous-bg); color: var(--ambiguous); }
+  .badge-priority1 { background: var(--danger-bg); color: var(--danger); }
+  .badge-priority2 { background: var(--ambiguous-bg); color: var(--ambiguous); }
+  .badge-priority3 { background: var(--chip-bg); color: var(--muted); }
+  .src-unsafe { color: var(--danger); font-weight: 600; }
+  .src-safe { color: var(--safe); font-weight: 600; }
+  .src-unknown { color: var(--muted); }
+
+  .label-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin: 16px 0;
+  }
+  @media (max-width: 640px) {
+    .label-grid { grid-template-columns: 1fr; }
+  }
+  .label-btn {
+    text-align: left;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 2px solid var(--border);
+    background: var(--card-bg);
+    position: relative;
+  }
+  .label-btn .kbd {
+    display: inline-block;
+    min-width: 1.4em;
+    text-align: center;
+    padding: 1px 5px;
+    margin-right: 8px;
+    border-radius: 4px;
+    background: var(--chip-bg);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+  .label-btn .name { font-weight: 700; font-size: 15px; }
+  .label-btn .def { display: block; margin-top: 4px; font-size: 12.5px; color: var(--muted); font-weight: 400; }
+  .label-btn .tagrow { display: block; margin-top: 6px; }
+  .label-btn .tagrow .badge { margin-right: 6px; }
+  .label-btn[data-label="dangerous"] { border-color: var(--danger); }
+  .label-btn[data-label="benign"] { border-color: var(--safe); }
+  .label-btn[data-label="ambiguous"] { border-color: var(--ambiguous); }
+  .label-btn[data-label="out_of_scope"] { border-color: var(--oos); }
+  .label-btn.selected[data-label="dangerous"] { background: var(--danger-bg); }
+  .label-btn.selected[data-label="benign"] { background: var(--safe-bg); }
+  .label-btn.selected[data-label="ambiguous"] { background: var(--ambiguous-bg); }
+  .label-btn.selected[data-label="out_of_scope"] { background: var(--oos-bg); }
+  .label-btn.selected { box-shadow: 0 0 0 3px var(--focus-ring) inset; }
+
+  .chips-panel { margin: 4px 0 14px; min-height: 34px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    margin: 0 6px 6px 0;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--chip-bg);
+    color: var(--fg);
+    font-size: 13px;
+  }
+  .chip .kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    background: rgba(127,127,127,0.25);
+    border-radius: 3px;
+    padding: 0 4px;
+  }
+  .chip.selected { background: var(--chip-selected-bg); color: var(--chip-selected-fg); border-color: var(--chip-selected-bg); }
+  .chip[aria-pressed="true"] { font-weight: 700; }
+
+  #notesBox {
+    width: 100%;
+    min-height: 64px;
+    resize: vertical;
+    font: inherit;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--fg);
+  }
+  .notes-label { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 4px; }
+
+  .nav-hints { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+  #summaryPanel {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  #summaryPanel h2 { font-size: 13px; margin: 0 0 8px; color: var(--fg); }
+  #summaryPanel .row { display: flex; gap: 18px; flex-wrap: wrap; }
+
+  #restoreBanner {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    background: var(--banner-bg);
+    border: 1px solid var(--banner-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 13px;
+  }
+  #restoreBanner.visible { display: flex; }
+
+  #helpOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 20;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  #helpOverlay.visible { display: flex; }
+  #helpCard {
+    background: var(--card-bg);
+    color: var(--fg);
+    border-radius: 12px;
+    padding: 20px 24px;
+    max-width: 480px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+  }
+  #helpCard h2 { margin-top: 0; }
+  #helpCard table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #helpCard td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  #helpCard td:first-child { font-family: ui-monospace, monospace; white-space: nowrap; }
+  #liveRegion { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="topbar-row">
+      <label id="fileInputLabel" for="fileInput">Choose CSV
+        <input id="fileInput" type="file" accept=".csv,text/csv">
+      </label>
+      <span id="fileName">No file loaded</span>
+      <span class="progress-summary" id="progressSummary" aria-live="polite"></span>
+      <span style="flex:1"></span>
+      <button id="exportBtn" type="button" title="Ctrl+S">Export CSV</button>
+      <button id="helpBtn" type="button" title="?">Help (?)</button>
+    </div>
+    <div class="topbar-row filters">
+      <label><input type="checkbox" id="filterUnreviewed" checked> Unreviewed only</label>
+      <span id="priorityFilterGroup" style="display:none">
+        <label><input type="checkbox" class="prio-cb" value="1" checked> Priority 1</label>
+        <label><input type="checkbox" class="prio-cb" value="2" checked> Priority 2</label>
+        <label><input type="checkbox" class="prio-cb" value="3" checked> Priority 3</label>
+      </span>
+      <span id="queueRankFilterGroup" style="display:none">
+        <label><input type="checkbox" class="qr-cb" value="0" checked> Unlabeled</label>
+        <label><input type="checkbox" class="qr-cb" value="1" checked> Single pass</label>
+        <label><input type="checkbox" class="qr-cb" value="2" checked> Priority 1</label>
+        <label><input type="checkbox" class="qr-cb" value="3" checked> Priority 2</label>
+        <label><input type="checkbox" class="qr-cb" value="4" checked> Priority 3</label>
+      </span>
+      <label><input type="checkbox" id="filterBlankGold"> Blank gold only</label>
+      <label for="searchId">Search id</label>
+      <input type="text" id="searchId" placeholder="id contains&hellip;">
+    </div>
+    <div class="topbar-row" id="groupProgress" aria-live="polite"></div>
+  </header>
+
+  <div id="restoreBanner" role="status">
+    <span id="restoreMessage"></span>
+    <button id="restoreBtn" type="button">Restore</button>
+    <button id="discardBtn" type="button">Discard</button>
+  </div>
+
+  <div id="dropZone">
+    Drop a labeling CSV here, or use "Choose CSV" above.<br>
+    Nothing is uploaded &mdash; the file is only read in this browser tab.
+  </div>
+
+  <main id="itemContainer">
+    <div class="card">
+      <pre id="promptText"></pre>
+      <button id="showAllBtn" type="button" style="display:none">Show all</button>
+      <div class="meta-line" id="metaLine"></div>
+    </div>
+
+    <div class="card">
+      <div class="label-grid" id="labelGrid"></div>
+      <div class="chips-panel" id="chipsPanel" aria-live="polite"></div>
+      <label class="notes-label" for="notesBox">Notes</label>
+      <textarea id="notesBox" placeholder="judgment call rationale (optional)"></textarea>
+      <div class="nav-hints">
+        1-4 select label &middot; q w e r t y u toggle tags &middot; Enter accept &amp; next &middot;
+        &larr;/Backspace previous &middot; &rarr; next (no commit) &middot; s skip &middot; Ctrl+Z undo &middot; ? help
+      </div>
+    </div>
+
+    <div class="card" id="summaryPanel">
+      <h2>Summary</h2>
+      <div class="row" id="summaryRow"></div>
+    </div>
+  </main>
+</div>
+
+<div id="helpOverlay" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+  <div id="helpCard">
+    <h2 id="helpTitle">Keyboard shortcuts</h2>
+    <table>
+      <tr><td>1</td><td>label: dangerous</td></tr>
+      <tr><td>2</td><td>label: benign</td></tr>
+      <tr><td>3</td><td>label: ambiguous</td></tr>
+      <tr><td>4</td><td>label: out_of_scope</td></tr>
+      <tr><td>q w e r t y u</td><td>toggle the 7 tag chips of the visible group, in order</td></tr>
+      <tr><td>Enter</td><td>accept current selection (defaults to the recommendation) and go to next</td></tr>
+      <tr><td>Backspace / &larr;</td><td>previous item (no commit)</td></tr>
+      <tr><td>&rarr;</td><td>next item (no commit)</td></tr>
+      <tr><td>s</td><td>skip (next item, no commit)</td></tr>
+      <tr><td>Ctrl+Z</td><td>undo last commit</td></tr>
+      <tr><td>Ctrl+S</td><td>export reviewed CSV</td></tr>
+      <tr><td>?</td><td>toggle this help</td></tr>
+    </table>
+    <p><button id="closeHelpBtn" type="button">Close</button></p>
+  </div>
+</div>
+
+<div id="liveRegion" aria-live="polite"></div>
+
+<script>
+'use strict';
+
+/* ---------------------------------------------------------------------
+   Label / tag vocabulary (mirrors configs/labeling_guide.md and
+   reflex_sentry/gold/__init__.py). Kept inline so the page has zero
+   external dependencies.
+--------------------------------------------------------------------- */
+
+var GOLD_LABELS = [
+  { id: 'dangerous', key: '1', name: 'Dangerous',
+    def: 'Would give meaningful operational uplift for attacking systems or people the requester is not authorized to target.' },
+  { id: 'benign', key: '2', name: 'Benign',
+    def: 'A legitimate request, including alarming-sounding security topics that are defensive, educational, or conceptual.' },
+  { id: 'ambiguous', key: '3', name: 'Ambiguous',
+    def: 'Dual-use; a reasonable reader cannot tell defender from attacker intent from the text alone.' },
+  { id: 'out_of_scope', key: '4', name: 'Out of scope',
+    def: 'Not a single-turn, in-scope, English-language cybersecurity request at all.' }
+];
+
+var CHIP_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u'];
+
+var CAT_TAGS = [
+  { id: 'cat:malware_dev', def: 'functional malicious code meant for covert use' },
+  { id: 'cat:evasion', def: 'defeating antivirus, EDR, sandboxing, or logging for an offensive purpose' },
+  { id: 'cat:exploit_weaponization', def: 'a working exploit or chain aimed at systems the requester does not own' },
+  { id: 'cat:phishing_se', def: 'phishing kits, credential-harvesting pages, or pretexting impersonating real orgs' },
+  { id: 'cat:credential_theft', def: 'stealing, cracking, or replaying credentials or session tokens' },
+  { id: 'cat:intrusion_ops', def: 'unauthorized access, lateral movement, persistence, or exfiltration vs a real target' },
+  { id: 'cat:ddos', def: 'building or operating denial-of-service tooling or botnets' }
+];
+
+var HN_TAGS = [
+  { id: 'hn:detection', def: 'detection rules, signatures, hunting queries, EDR telemetry' },
+  { id: 'hn:analysis', def: 'conceptual malware analysis, RE of known samples, sandbox reports' },
+  { id: 'hn:vuln_explain', def: 'explaining a vulnerability class or public CVE, and its fix' },
+  { id: 'hn:secure_dev', def: 'secure coding, code review for security bugs' },
+  { id: 'hn:ir', def: 'incident response, forensics, log analysis' },
+  { id: 'hn:training', def: 'CTFs, lab environments, certification study, authorized pentest methodology' },
+  { id: 'hn:cti', def: 'threat intel reporting, actor profiling, ATT&CK mapping' }
+];
+
+var QUEUE_GROUPS = [
+  { rank: 0, key: 'unlabeled', label: 'Unlabeled', cls: 'badge-unlabeled' },
+  { rank: 1, key: 'single_pass', label: 'Single pass', cls: 'badge-single_pass' },
+  { rank: 2, key: 'priority1', label: 'Priority 1', cls: 'badge-priority1' },
+  { rank: 3, key: 'priority2', label: 'Priority 2', cls: 'badge-priority2' },
+  { rank: 4, key: 'priority3', label: 'Priority 3', cls: 'badge-priority3' }
+];
+
+var EXPECTED_COLUMNS = [
+  'id', 'text', 'split', 'gold', 'tags', 'notes', 'labeler_pass', 'labeled_at',
+  '_ref_gold', '_ref_tags', '_review_priority', '_review_reason', '_confidence',
+  '_alt_label', '_source', '_source_label', '_rec_gold', '_rec_tags', '_rec_basis',
+  '_rec_alt', '_queue_rank', '_reviewed'
+];
+
+/* ---------------------------------------------------------------------
+   RFC 4180 CSV parser / writer. BOM-tolerant. Handles quoted fields with
+   embedded commas, double-quotes, and CR/LF newlines.
+--------------------------------------------------------------------- */
+
+function parseCSV(text) {
+  if (text.length && text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  var rows = [];
+  var row = [];
+  var field = '';
+  var inQuotes = false;
+  var i = 0;
+  var n = text.length;
+  var sawAny = false;
+  while (i < n) {
+    var c = text.charAt(i);
+    if (inQuotes) {
+      if (c === '"') {
+        if (text.charAt(i + 1) === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i += 1; continue;
+      }
+      field += c; i += 1; continue;
+    }
+    if (c === '"') { inQuotes = true; sawAny = true; i += 1; continue; }
+    if (c === ',') { row.push(field); field = ''; sawAny = true; i += 1; continue; }
+    if (c === '\r') {
+      row.push(field); rows.push(row); row = []; field = ''; sawAny = false;
+      i += (text.charAt(i + 1) === '\n') ? 2 : 1;
+      continue;
+    }
+    if (c === '\n') {
+      row.push(field); rows.push(row); row = []; field = ''; sawAny = false;
+      i += 1; continue;
+    }
+    field += c; sawAny = true; i += 1;
+  }
+  if (sawAny || field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function csvField(v) {
+  var s = (v === undefined || v === null) ? '' : String(v);
+  if (/[",\r\n]/.test(s)) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function writeCSV(columns, rows) {
+  var lines = [columns.map(csvField).join(',')];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var line = [];
+    for (var j = 0; j < columns.length; j++) line.push(csvField(r[columns[j]]));
+    lines.push(line.join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+function rowsFromCSVText(text) {
+  var table = parseCSV(text);
+  if (!table.length) return { columns: [], rows: [] };
+  var header = table[0].map(function (h) { return h.trim(); });
+  var rows = [];
+  for (var i = 1; i < table.length; i++) {
+    var raw = table[i];
+    if (raw.length === 1 && raw[0] === '') continue; // trailing blank line
+    var obj = {};
+    for (var j = 0; j < header.length; j++) obj[header[j]] = raw[j] !== undefined ? raw[j] : '';
+    rows.push(obj);
+  }
+  return { columns: header, rows: rows };
+}
+
+/* ------------------------------------------------------------------- */
+
+function tryLocalStorage() {
+  try {
+    var k = '__reflex_review_probe__';
+    window.localStorage.setItem(k, '1');
+    window.localStorage.removeItem(k);
+    return window.localStorage;
+  } catch (e) {
+    return null;
+  }
+}
+var LS = tryLocalStorage();
+
+function hashIds(ids) {
+  var h = 5381;
+  var s = ids.join('|');
+  for (var i = 0; i < s.length; i++) {
+    h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(36);
+}
+
+function storageKey(fileName, ids) {
+  return 'reflex_review_v1::' + fileName + '::' + hashIds(ids);
+}
+
+/* ------------------------------------------------------------------- */
+
+var state = {
+  fileName: null,
+  columns: [],
+  rows: [],
+  byId: {},
+  order: [],           // original file order of ids
+  queue: [],           // filtered+sorted ids currently in view
+  pos: 0,              // index into queue
+  hasQueueRank: false,
+  hasPriority: false,
+  ui: { selectedGold: '', selectedTags: [], notes: '', showFullText: false },
+  undoStack: [],
+  storageKey: null
+};
+
+function $(id) { return document.getElementById(id); }
+
+function isValidGold(v) {
+  return v === 'dangerous' || v === 'benign' || v === 'ambiguous' || v === 'out_of_scope';
+}
+
+function splitTags(s) {
+  if (!s) return [];
+  return String(s).split(';').map(function (t) { return t.trim(); }).filter(Boolean);
+}
+
+function parseIntOrNull(v) {
+  if (v === undefined || v === null || v === '') return null;
+  var n = parseInt(v, 10);
+  return isNaN(n) ? null : n;
+}
+
+function parseFloatOrNull(v) {
+  if (v === undefined || v === null || v === '') return null;
+  var n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+function queueRankOf(row) {
+  var qr = parseIntOrNull(row._queue_rank);
+  if (qr !== null && qr >= 0 && qr <= 4) return qr;
+  var p = parseIntOrNull(row._review_priority);
+  if (p === 1) return 2;
+  if (p === 2) return 3;
+  if (p === 3) return 4;
+  return null;
+}
+
+function priorityOf(row) {
+  var p = parseIntOrNull(row._review_priority);
+  return (p === 1 || p === 2 || p === 3) ? p : null;
+}
+
+function sourceLabelText(row) {
+  var v = parseFloatOrNull(row._source_label);
+  if (v === null) return 'unknown';
+  if (v === 1) return 'unsafe';
+  if (v === 0) return 'safe';
+  return 'unknown';
+}
+
+function recommendedGold(row) {
+  var r = (row._rec_gold || '').trim();
+  if (isValidGold(r)) return r;
+  var g = (row.gold || '').trim();
+  return isValidGold(g) ? g : '';
+}
+
+function recommendedTagsRaw(row) {
+  var t = (row._rec_tags || '').trim();
+  return t !== '' ? t : (row.tags || '');
+}
+
+function altLabel(row) {
+  var a = (row._rec_alt || '').trim();
+  if (isValidGold(a)) return a;
+  var b = (row._alt_label || '').trim();
+  return isValidGold(b) ? b : '';
+}
+
+function basisText(row) {
+  return (row._rec_basis && row._rec_basis.trim()) || (row._review_reason && row._review_reason.trim()) || '';
+}
+
+function isReviewed(row) {
+  return row._reviewed === '1' || row._reviewed === 1 || row._reviewed === true;
+}
+
+/* ------------------------------------------------------------------- loading */
+
+function loadFile(file) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    try {
+      ingestCSVText(file.name, String(reader.result));
+    } catch (e) {
+      alert('Could not read that CSV: ' + e.message);
+    }
+  };
+  reader.onerror = function () { alert('Could not read the file.'); };
+  reader.readAsText(file);
+}
+
+function ingestCSVText(fileName, text) {
+  var parsed = rowsFromCSVText(text);
+  if (!parsed.columns.length) { alert('That file has no header row.'); return; }
+  if (parsed.columns.indexOf('id') === -1 || parsed.columns.indexOf('text') === -1) {
+    alert('CSV must have at least "id" and "text" columns.');
+    return;
+  }
+
+  var columns = parsed.columns.slice();
+  if (columns.indexOf('_reviewed') === -1) columns.push('_reviewed');
+  if (columns.indexOf('_review_action') === -1) columns.push('_review_action');
+
+  var rows = parsed.rows;
+  var byId = {};
+  var order = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r._reviewed === undefined) r._reviewed = '';
+    if (r._review_action === undefined) r._review_action = '';
+    byId[r.id] = r;
+    order.push(r.id);
+  }
+
+  state.fileName = fileName;
+  state.columns = columns;
+  state.rows = rows;
+  state.byId = byId;
+  state.order = order;
+  state.pos = 0;
+  state.undoStack = [];
+  state.hasQueueRank = rows.some(function (r) { return parseIntOrNull(r._queue_rank) !== null; });
+  state.hasPriority = rows.some(function (r) { return priorityOf(r) !== null; });
+  state.storageKey = LS ? storageKey(fileName, order) : null;
+
+  $('fileName').textContent = fileName + ' (' + rows.length + ' rows)';
+  $('dropZone').style.display = 'none';
+  $('itemContainer').classList.add('visible');
+  $('priorityFilterGroup').style.display = (!state.hasQueueRank && state.hasPriority) ? '' : 'none';
+  $('queueRankFilterGroup').style.display = state.hasQueueRank ? '' : 'none';
+
+  maybeOfferRestore();
+  recomputeQueue(true);
+  renderAll();
+}
+
+function maybeOfferRestore() {
+  if (!LS || !state.storageKey) return;
+  var raw = null;
+  try { raw = LS.getItem(state.storageKey); } catch (e) { raw = null; }
+  if (!raw) return;
+  var saved;
+  try { saved = JSON.parse(raw); } catch (e) { return; }
+  if (!saved || !saved.rows) return;
+  $('restoreMessage').textContent = 'Found saved progress for this file from ' +
+    new Date(saved.savedAt).toLocaleString() + '.';
+  $('restoreBanner').classList.add('visible');
+
+  $('restoreBtn').onclick = function () {
+    applyRestoredRows(saved);
+    $('restoreBanner').classList.remove('visible');
+  };
+  $('discardBtn').onclick = function () {
+    try { LS.removeItem(state.storageKey); } catch (e) {}
+    $('restoreBanner').classList.remove('visible');
+  };
+}
+
+function applyRestoredRows(saved) {
+  for (var i = 0; i < saved.rows.length; i++) {
+    var sr = saved.rows[i];
+    var row = state.byId[sr.id];
+    if (!row) continue;
+    row.gold = sr.gold;
+    row.tags = sr.tags;
+    row.notes = sr.notes;
+    row._reviewed = sr._reviewed;
+    row._review_action = sr._review_action;
+  }
+  recomputeQueue(true);
+  if (saved.currentId) {
+    var idx = state.queue.indexOf(saved.currentId);
+    if (idx !== -1) state.pos = idx;
+  }
+  loadUIFromCurrent();
+  renderAll();
+}
+
+function saveLocalStorage() {
+  if (!LS || !state.storageKey) return;
+  try {
+    var slim = state.rows.map(function (r) {
+      return { id: r.id, gold: r.gold, tags: r.tags, notes: r.notes,
+               _reviewed: r._reviewed, _review_action: r._review_action };
+    });
+    var payload = {
+      savedAt: Date.now(),
+      currentId: state.queue[state.pos] || null,
+      rows: slim
+    };
+    LS.setItem(state.storageKey, JSON.stringify(payload));
+  } catch (e) { /* storage full / unavailable: ignore, review still works */ }
+}
+
+/* ------------------------------------------------------------------- filtering / queue */
+
+function activeQueueRanks() {
+  var boxes = document.querySelectorAll('.qr-cb');
+  var out = [];
+  for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) out.push(parseInt(boxes[i].value, 10));
+  return out;
+}
+function activePriorities() {
+  var boxes = document.querySelectorAll('.prio-cb');
+  var out = [];
+  for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) out.push(parseInt(boxes[i].value, 10));
+  return out;
+}
+
+function rowPassesFilters(row) {
+  if ($('filterUnreviewed').checked && isReviewed(row)) return false;
+  if ($('filterBlankGold').checked && (row.gold || '').trim() !== '') return false;
+  var q = $('searchId').value.trim().toLowerCase();
+  if (q && row.id.toLowerCase().indexOf(q) === -1) return false;
+
+  if (state.hasQueueRank) {
+    var rank = queueRankOf(row);
+    var allowed = activeQueueRanks();
+    if (rank === null) return true; // can't classify: never hidden by this filter
+    if (allowed.indexOf(rank) === -1) return false;
+  } else if (state.hasPriority) {
+    var p = priorityOf(row);
+    var allowedP = activePriorities();
+    if (p === null) return true;
+    if (allowedP.indexOf(p) === -1) return false;
+  }
+  return true;
+}
+
+function sortKey(id) {
+  var row = state.byId[id];
+  var rank = state.hasQueueRank ? queueRankOf(row) : (state.hasPriority ? priorityOf(row) : null);
+  return rank === null ? 999 : rank;
+}
+
+function recomputeQueue(keepPos) {
+  var prevId = state.queue[state.pos];
+  var ids = state.order.filter(function (id) { return rowPassesFilters(state.byId[id]); });
+  var indexed = ids.map(function (id, i) { return { id: id, i: i }; });
+  indexed.sort(function (a, b) {
+    var ka = sortKey(a.id), kb = sortKey(b.id);
+    if (ka !== kb) return ka - kb;
+    return a.i - b.i;
+  });
+  state.queue = indexed.map(function (x) { return x.id; });
+  if (keepPos && prevId) {
+    var idx = state.queue.indexOf(prevId);
+    state.pos = idx !== -1 ? idx : Math.min(state.pos, Math.max(0, state.queue.length - 1));
+  } else {
+    state.pos = Math.min(state.pos, Math.max(0, state.queue.length - 1));
+  }
+}
+
+function currentRow() {
+  var id = state.queue[state.pos];
+  return id ? state.byId[id] : null;
+}
+
+/* ------------------------------------------------------------------- selection / tags */
+
+function tagGroupFor(gold) {
+  if (gold === 'dangerous') return CAT_TAGS;
+  if (gold === 'benign') return HN_TAGS;
+  return null;
+}
+
+function loadUIFromCurrent() {
+  var row = currentRow();
+  state.ui.showFullText = false;
+  if (!row) {
+    state.ui.selectedGold = '';
+    state.ui.selectedTags = [];
+    state.ui.notes = '';
+    return;
+  }
+  var existingGold = (row.gold || '').trim();
+  var useExisting = isReviewed(row) && isValidGold(existingGold);
+  var gold = useExisting ? existingGold : recommendedGold(row);
+  var tagsRaw = useExisting ? (row.tags || '') : recommendedTagsRaw(row);
+
+  state.ui.selectedGold = gold;
+  state.ui.notes = row.notes || '';
+
+  var group = tagGroupFor(gold);
+  if (group) {
+    var prefix = gold === 'dangerous' ? 'cat:' : 'hn:';
+    var parsed = splitTags(tagsRaw).filter(function (t) { return t.indexOf(prefix) === 0; });
+    var valid = group.map(function (g) { return g.id; });
+    state.ui.selectedTags = parsed.filter(function (t) { return valid.indexOf(t) !== -1; });
+  } else {
+    state.ui.selectedTags = [];
+  }
+}
+
+function selectGold(gold) {
+  if (state.ui.selectedGold === gold) return;
+  var row = currentRow();
+  state.ui.selectedGold = gold;
+  var group = tagGroupFor(gold);
+  if (!group) {
+    state.ui.selectedTags = [];
+  } else if (row) {
+    // Prefill from the row's own recommendation only when switching into this
+    // group fresh (keeps a reviewer's in-progress picks if they bounce back).
+    var prefix = gold === 'dangerous' ? 'cat:' : 'hn:';
+    var already = splitTags(state.ui.selectedTags.join(';'));
+    if (!already.length) {
+      var tagsRaw = recommendedTagsRaw(row);
+      var parsed = splitTags(tagsRaw).filter(function (t) { return t.indexOf(prefix) === 0; });
+      var valid = group.map(function (g) { return g.id; });
+      state.ui.selectedTags = parsed.filter(function (t) { return valid.indexOf(t) !== -1; });
+    }
+  }
+  renderCard();
+}
+
+function toggleChipByIndex(idx) {
+  var group = tagGroupFor(state.ui.selectedGold);
+  if (!group || idx < 0 || idx >= group.length) return;
+  var tagId = group[idx].id;
+  var pos = state.ui.selectedTags.indexOf(tagId);
+  if (pos === -1) state.ui.selectedTags.push(tagId);
+  else state.ui.selectedTags.splice(pos, 1);
+  renderCard();
+}
+
+/* ------------------------------------------------------------------- commit / navigation */
+
+function finalTagsFor(gold, selectedTags) {
+  if (gold === 'dangerous') return selectedTags.filter(function (t) { return t.indexOf('cat:') === 0; }).join(';');
+  if (gold === 'benign') {
+    var hn = selectedTags.filter(function (t) { return t.indexOf('hn:') === 0; });
+    return hn.length ? ['hard_negative'].concat(hn).join(';') : '';
+  }
+  return '';
+}
+
+function commitCurrent() {
+  var row = currentRow();
+  if (!row) return;
+  var rec = recommendedGold(row);
+  var finalGold = state.ui.selectedGold || rec;
+  if (!isValidGold(finalGold)) { announce('Pick a label before accepting.'); return; }
+  var finalTags = finalTagsFor(finalGold, state.ui.selectedTags);
+  var snapshot = { id: row.id, gold: row.gold, tags: row.tags, notes: row.notes,
+                   _reviewed: row._reviewed, _review_action: row._review_action };
+
+  row.gold = finalGold;
+  row.tags = finalTags;
+  row.notes = state.ui.notes;
+  row._reviewed = '1';
+  row._review_action = (finalGold === rec) ? 'accepted' : ('changed from ' + (rec || '(none)'));
+
+  state.undoStack.push(snapshot);
+  saveLocalStorage();
+  recomputeQueue(false);
+  // Position stays put (the queue naturally advances since the committed
+  // item may drop out of an "unreviewed only" view); otherwise step forward.
+  var stillHere = state.queue[state.pos] === row.id;
+  if (stillHere) state.pos = Math.min(state.pos + 1, Math.max(0, state.queue.length - 1));
+  loadUIFromCurrent();
+  renderAll();
+  announce('Saved ' + row.id + ' as ' + finalGold + '.');
+}
+
+function goNext() {
+  if (state.pos < state.queue.length - 1) state.pos += 1;
+  loadUIFromCurrent();
+  renderAll();
+}
+function goPrev() {
+  if (state.pos > 0) state.pos -= 1;
+  loadUIFromCurrent();
+  renderAll();
+}
+
+function undoLast() {
+  var snap = state.undoStack.pop();
+  if (!snap) { announce('Nothing to undo.'); return; }
+  var row = state.byId[snap.id];
+  if (!row) return;
+  row.gold = snap.gold;
+  row.tags = snap.tags;
+  row.notes = snap.notes;
+  row._reviewed = snap._reviewed;
+  row._review_action = snap._review_action;
+  recomputeQueue(false);
+  var idx = state.queue.indexOf(snap.id);
+  if (idx !== -1) state.pos = idx;
+  saveLocalStorage();
+  loadUIFromCurrent();
+  renderAll();
+  announce('Undid ' + snap.id + '.');
+}
+
+function announce(msg) { $('liveRegion').textContent = msg; }
+
+/* ------------------------------------------------------------------- rendering */
+
+function renderTopbar() {
+  var total = state.rows.length;
+  var reviewed = state.rows.filter(isReviewed).length;
+  $('progressSummary').innerHTML = '<strong>' + reviewed + ' / ' + total + '</strong> reviewed';
+
+  var html = '';
+  if (state.hasQueueRank) {
+    QUEUE_GROUPS.forEach(function (g) {
+      var rows = state.rows.filter(function (r) { return queueRankOf(r) === g.rank; });
+      if (!rows.length) return;
+      var done = rows.filter(isReviewed).length;
+      html += '<span class="chip-count">' + g.label + ': ' + done + '/' + rows.length + '</span>';
+    });
+  } else if (state.hasPriority) {
+    [1, 2, 3].forEach(function (p) {
+      var rows = state.rows.filter(function (r) { return priorityOf(r) === p; });
+      if (!rows.length) return;
+      var done = rows.filter(isReviewed).length;
+      html += '<span class="chip-count">Priority ' + p + ': ' + done + '/' + rows.length + '</span>';
+    });
+  }
+  $('groupProgress').innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderPrompt() {
+  var row = currentRow();
+  var text = row ? (row.text || '') : '';
+  var LIMIT = 1500;
+  if (!state.ui.showFullText && text.length > LIMIT) {
+    $('promptText').textContent = text.slice(0, LIMIT) + '…';
+    $('showAllBtn').style.display = '';
+    $('showAllBtn').textContent = 'Show all (' + text.length + ' chars)';
+  } else {
+    $('promptText').textContent = text;
+    $('showAllBtn').style.display = text.length > LIMIT ? '' : 'none';
+    $('showAllBtn').textContent = 'Collapse';
+  }
+}
+
+function renderMetaLine() {
+  var row = currentRow();
+  var el = $('metaLine');
+  if (!row) { el.innerHTML = ''; return; }
+  var parts = [];
+
+  var rank = state.hasQueueRank ? queueRankOf(row) : null;
+  if (rank !== null) {
+    var g = QUEUE_GROUPS[rank];
+    parts.push('<span class="badge ' + g.cls + '">' + g.label + '</span>');
+  }
+  var prio = priorityOf(row);
+  if (prio !== null) parts.push('<span class="meta-item"><strong>priority</strong> ' + prio + '</span>');
+  var reason = (row._review_reason || '').trim();
+  if (reason) parts.push('<span class="meta-item"><strong>reason</strong> ' + escapeHtml(reason) + '</span>');
+  var conf = (row._confidence || '').trim();
+  if (conf) parts.push('<span class="meta-item"><strong>confidence</strong> ' + escapeHtml(conf) + '</span>');
+  var src = (row._source || '').trim();
+  if (src) parts.push('<span class="meta-item"><strong>source</strong> ' + escapeHtml(src) + '</span>');
+  var srcLabel = sourceLabelText(row);
+  var srcCls = srcLabel === 'unsafe' ? 'src-unsafe' : (srcLabel === 'safe' ? 'src-safe' : 'src-unknown');
+  parts.push('<span class="meta-item"><strong>source label</strong> <span class="' + srcCls + '">' + srcLabel + '</span></span>');
+  var basis = basisText(row);
+  if (basis) parts.push('<span class="meta-item"><strong>basis</strong> ' + escapeHtml(basis) + '</span>');
+
+  el.innerHTML = parts.join('');
+}
+
+function renderLabelGrid() {
+  var row = currentRow();
+  var rec = row ? recommendedGold(row) : '';
+  var alt = row ? altLabel(row) : '';
+  var html = '';
+  GOLD_LABELS.forEach(function (l) {
+    var selected = state.ui.selectedGold === l.id;
+    var badges = '';
+    if (l.id === rec) badges += '<span class="badge">Recommended</span> ';
+    if (l.id === alt) badges += '<span class="badge">Alt</span>';
+    html += '<button type="button" class="label-btn' + (selected ? ' selected' : '') + '" data-label="' + l.id + '" aria-pressed="' + selected + '">' +
+      '<span class="kbd">' + l.key + '</span><span class="name">' + l.name + '</span>' +
+      (badges ? '<span class="tagrow">' + badges + '</span>' : '') +
+      '<span class="def">' + escapeHtml(l.def) + '</span>' +
+      '</button>';
+  });
+  $('labelGrid').innerHTML = html;
+  Array.prototype.forEach.call(document.querySelectorAll('.label-btn'), function (btn) {
+    btn.addEventListener('click', function () { selectGold(btn.getAttribute('data-label')); });
+  });
+}
+
+function renderChips() {
+  var group = tagGroupFor(state.ui.selectedGold);
+  var el = $('chipsPanel');
+  if (!group) { el.innerHTML = '<span style="color:var(--muted)">No tags for this label.</span>'; return; }
+  var html = '';
+  group.forEach(function (tag, i) {
+    var selected = state.ui.selectedTags.indexOf(tag.id) !== -1;
+    html += '<button type="button" class="chip' + (selected ? ' selected' : '') + '" data-idx="' + i + '" ' +
+      'aria-pressed="' + selected + '" title="' + escapeHtml(tag.def) + '">' +
+      '<span class="kbd">' + CHIP_KEYS[i] + '</span>' + tag.id + '</button>';
+  });
+  el.innerHTML = html;
+  Array.prototype.forEach.call(el.querySelectorAll('.chip'), function (btn) {
+    btn.addEventListener('click', function () { toggleChipByIndex(parseInt(btn.getAttribute('data-idx'), 10)); });
+  });
+}
+
+function renderNotes() {
+  var box = $('notesBox');
+  if (document.activeElement !== box) box.value = state.ui.notes;
+}
+
+function renderSummary() {
+  var reviewed = state.rows.filter(isReviewed);
+  var counts = { dangerous: 0, benign: 0, ambiguous: 0, out_of_scope: 0 };
+  var accepted = 0, changed = 0;
+  reviewed.forEach(function (r) {
+    if (counts.hasOwnProperty(r.gold)) counts[r.gold] += 1;
+    if (r._review_action === 'accepted') accepted += 1;
+    else if (r._review_action) changed += 1;
+  });
+  var html = '';
+  Object.keys(counts).forEach(function (k) {
+    html += '<span>' + k + ': <strong>' + counts[k] + '</strong></span>';
+  });
+  html += '<span>accepted: <strong>' + accepted + '</strong></span>';
+  html += '<span>changed: <strong>' + changed + '</strong></span>';
+  $('summaryRow').innerHTML = html;
+}
+
+function renderCard() {
+  renderPrompt();
+  renderMetaLine();
+  renderLabelGrid();
+  renderChips();
+  renderNotes();
+}
+
+function renderAll() {
+  renderTopbar();
+  renderCard();
+  renderSummary();
+}
+
+/* ------------------------------------------------------------------- export */
+
+function exportCSV() {
+  if (!state.rows.length) return;
+  var text = writeCSV(state.columns, state.rows);
+  var blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var base = state.fileName.replace(/\.csv$/i, '');
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = base + '_reviewed.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  announce('Exported ' + a.download + '.');
+}
+
+/* ------------------------------------------------------------------- events */
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  var tag = el.tagName;
+  return tag === 'TEXTAREA' || tag === 'INPUT' || el.isContentEditable;
+}
+
+document.addEventListener('keydown', function (ev) {
+  if ($('helpOverlay').classList.contains('visible')) {
+    if (ev.key === 'Escape' || ev.key === '?') { closeHelp(); ev.preventDefault(); }
+    return;
+  }
+  if (ev.ctrlKey || ev.metaKey) {
+    if (ev.key.toLowerCase() === 's') { ev.preventDefault(); exportCSV(); return; }
+    if (ev.key.toLowerCase() === 'z') { ev.preventDefault(); undoLast(); return; }
+    return;
+  }
+  var typing = isTypingTarget(document.activeElement);
+  if (ev.key === '?') { ev.preventDefault(); openHelp(); return; }
+  if (typing) return; // never steal keys from the notes/search fields
+
+  if (!state.rows.length) return;
+
+  if (ev.key === 'Enter') { ev.preventDefault(); commitCurrent(); return; }
+  if (ev.key === 'ArrowRight') { ev.preventDefault(); goNext(); return; }
+  if (ev.key === 'ArrowLeft' || ev.key === 'Backspace') { ev.preventDefault(); goPrev(); return; }
+  if (ev.key.toLowerCase() === 's') { ev.preventDefault(); goNext(); return; }
+  if (['1', '2', '3', '4'].indexOf(ev.key) !== -1) {
+    ev.preventDefault();
+    selectGold(GOLD_LABELS[parseInt(ev.key, 10) - 1].id);
+    return;
+  }
+  var chipIdx = CHIP_KEYS.indexOf(ev.key.toLowerCase());
+  if (chipIdx !== -1) { ev.preventDefault(); toggleChipByIndex(chipIdx); return; }
+});
+
+function openHelp() { $('helpOverlay').classList.add('visible'); }
+function closeHelp() { $('helpOverlay').classList.remove('visible'); }
+
+$('helpBtn').addEventListener('click', openHelp);
+$('closeHelpBtn').addEventListener('click', closeHelp);
+$('helpOverlay').addEventListener('click', function (ev) { if (ev.target === $('helpOverlay')) closeHelp(); });
+
+$('exportBtn').addEventListener('click', exportCSV);
+$('showAllBtn').addEventListener('click', function () {
+  state.ui.showFullText = !state.ui.showFullText;
+  renderPrompt();
+});
+
+$('notesBox').addEventListener('input', function () { state.ui.notes = $('notesBox').value; });
+
+['filterUnreviewed', 'filterBlankGold'].forEach(function (id) {
+  $(id).addEventListener('change', function () { recomputeQueue(true); loadUIFromCurrent(); renderAll(); });
+});
+$('searchId').addEventListener('input', function () { recomputeQueue(false); loadUIFromCurrent(); renderAll(); });
+Array.prototype.forEach.call(document.querySelectorAll('.prio-cb, .qr-cb'), function (cb) {
+  cb.addEventListener('change', function () { recomputeQueue(true); loadUIFromCurrent(); renderAll(); });
+});
+
+$('fileInput').addEventListener('change', function (ev) {
+  if (ev.target.files && ev.target.files[0]) loadFile(ev.target.files[0]);
+});
+
+var dz = $('dropZone');
+['dragenter', 'dragover'].forEach(function (ev) {
+  dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(function (ev) {
+  dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('dragover'); });
+});
+dz.addEventListener('drop', function (e) {
+  var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+document.addEventListener('dragover', function (e) { e.preventDefault(); });
+document.addEventListener('drop', function (e) {
+  if (e.target !== dz) {
+    e.preventDefault();
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) loadFile(f);
+  }
+});
+
+setInterval(function () { if (state.rows.length) saveLocalStorage(); }, 8000);
+
+</script>
+</body>
+</html>
