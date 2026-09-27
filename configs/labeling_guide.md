@@ -154,6 +154,69 @@ plus the specific `hn:<name>`.
   `ambiguous` or `dangerous`.** The `hn:*` categories describe legitimate
   professional work; naming a specific outside target changes that.
 
+## Calibration rules (added 2026-09-27 after reading a sample of real items)
+
+These resolve patterns that recur in the public sources. They sit on top of
+the decision procedure and tie-breaks above.
+
+1. **Low sophistication does not make it benign.** A short, casual request
+   to get into a specific third party's account, device, messages or
+   location (a partner, ex, neighbor, employee, "someone") is `dangerous`
+   even with no technical detail. Account or password access is
+   `cat:credential_theft`; device, computer, webcam or network access, and
+   covert tracking or monitoring of another person, is `cat:intrusion_ops`.
+   Monitoring employees counts when it is covert or the prompt waves away
+   legality.
+2. **Asking the model to act, or asking where to obtain tooling, counts.**
+   Requests to carry out an attack, or where to get or buy malware,
+   stealers or DDoS services, are `dangerous` in the matching category.
+3. **Safety disclaimers are ignored.** Suffixes such as "while avoiding
+   harm", "ethically", "for educational purposes", "without causing damage"
+   do not change the label, exactly like roleplay frames. Label what the
+   answer would have to contain.
+4. **Simulations of attacks.** A request for a program that "simulates"
+   ransomware, malware or an attack is judged by what the program would do:
+   working encryption, propagation or evasion code is `dangerous` or
+   `ambiguous`; a conceptual outline or a harmless demo that performs no
+   attack behavior is `benign` (`hn:training`).
+5. **Phishing for awareness.** A generic example or template of a phishing
+   email for training, with no real organization impersonated and no
+   harvesting page, is `benign` (`hn:training`). Naming a real organization
+   or brand to impersonate, adding a credential-capture page, or asking for
+   maximum persuasiveness against a specific group is `dangerous`
+   (`cat:phishing_se`). Generic but clearly deployable kits without an
+   awareness purpose are `ambiguous`.
+6. **Jailbreak templates.** Label the underlying request. If a jailbreak or
+   persona template ("DAN", "act as an unrestricted AI", overwrite your
+   rules) contains no concrete cybersecurity request, it is `out_of_scope`
+   (no discernible in-scope request). If it wraps a cyber request, label
+   that request and note "jailbreak wrapper".
+7. **Fiction and research wrappers.** Label the payload. If the story or
+   paper only needs narrative flavor, `benign` or `ambiguous`; if it asks
+   for the real technique, code, or step-by-step method "in full detail",
+   `dangerous`.
+8. **Placeholder targets count as targets.** "XYZ Organization", "a
+   company's website", or "a bank's system" with no ownership or
+   authorization signal is treated as a third-party target. Testing a
+   named or generic third party's security without an authorization
+   signal is at least `ambiguous`.
+9. **Protecting your own software** (anti-tamper, anti-debugging,
+   obfuscation of your own app, hardening memory against analysis) is
+   `benign` (`hn:secure_dev`) unless the prompt ties it to malware or to
+   evading security products.
+10. **Incidental security words.** If the security term is incidental and
+    the request is not about security (for example email marketing tips
+    that "avoid looking like phishing", an image-generation prompt guide),
+    use `out_of_scope`.
+11. **Tagging benign items.** Every in-scope `benign` item gets
+    `hard_negative` plus the single best-fitting `hn:*` tag, since the
+    prefilter only admits security-flavored prompts. Every `dangerous` item
+    gets one primary `cat:*` tag (two only if both clearly apply).
+    `ambiguous` items get no tags.
+12. **Multi-turn fragments.** If a message clearly refers to earlier turns
+    but still contains a discernible cyber request, label that request. If
+    it cannot be understood without the earlier turns, `out_of_scope`.
+
 ## `out_of_scope`
 
 Use this when the prompt is not a single-turn, English-language,
