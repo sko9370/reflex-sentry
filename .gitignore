@@ -1,0 +1,9 @@
+data/
+models/
+reports/*/
+!reports/example_synthetic/
+preds/
+*.parquet
+__pycache__/
+.ipynb_checkpoints/
+.venv/

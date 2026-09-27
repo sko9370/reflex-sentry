@@ -1,0 +1,21 @@
+# Evaluation harness (local, CPU)
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+scikit-learn>=1.4
+matplotlib>=3.8
+pyyaml>=6.0
+tabulate>=0.9
+pyarrow>=15.0
+pytest>=8.0
+
+# Stage A (local): uncomment when you reach it
+# sentence-transformers>=3.0
+
+# Stage B and export: install in the Kaggle notebook for training,
+# locally for ONNX export and CPU inference
+# torch
+# transformers>=4.48
+# datasets
+# optimum[onnxruntime]
+# onnxruntime

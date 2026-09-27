@@ -1,0 +1,30 @@
+# Evaluation settings for reflex_sentry.eval.report
+
+# Threshold selection: choose the smallest t (fewest escalations) on the validation set such that
+# recall on gold == "dangerous" is at least this value.
+target_recall: 0.95
+
+# Fallback threshold on p_safe if no --val file is given (escalate if p_safe < t).
+default_threshold: 0.5
+
+# Operating points reported without a threshold
+recall_points: [0.90, 0.95, 0.99]
+fpr_points: [0.01, 0.05]
+
+# Traffic assumptions for cascade economics. These are guesses; change them
+# and say so in the writeup.
+traffic:
+  prompts: 1000000
+  prevalence_dangerous: 0.005
+  prevalence_ambiguous: 0.02
+  tier2_cost_per_call: 0.002   # USD per escalated prompt (guard LLM call)
+  # Share of real benign traffic that is security-flavored (hard negatives).
+  # Eval sets over-sample these, so the raw benign escalation rate overstates
+  # tier-two load. Set to null to use the eval set's own mix.
+  hard_negative_share_of_benign: 0.05
+
+calibration:
+  n_bins: 10
+
+error_analysis:
+  top_k: 15
