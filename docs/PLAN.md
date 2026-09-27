@@ -25,9 +25,17 @@ Teacher labeling will be a configurable scorer supporting two presets:
 
 Running both and using the disagreement between them as the `unsure` signal is preferred over a single teacher's confidence, per the soft-target formula in `README.md` section 4.3. This is a design decision for milestone 3 and is not implemented in this session.
 
-### 2026-09-27: default OOD holdout source is toxic_chat
+### 2026-09-27: OOD holdout is four sources, not one
 
-`test_ood` defaults to holding out the `toxic_chat` source (ToxicChat / LMSYS) entirely from training and threshold selection. This is configurable in `configs/data.yaml` and should be revisited once per-source in-scope prompt counts are known: if `toxic_chat` turns out to be too small (or too large relative to the other sources) after scope filtering, a different source may be a better OOD holdout.
+The first real build showed `toxic_chat` alone yields only 78 in-scope candidates (about 16 unsafe), too few for a meaningful OOD recall. `test_ood` now holds out `toxic_chat`, `aegis2`, `hh_redteam` and `beavertails` together: real users, human red-teamers and two crowd-annotated sets. Together they supplied under 4% of training rows. This departs from the README's "one entire source" wording; the writeup should say so.
+
+### 2026-09-27: gold set sizes 300 val, 300 test, 200 test_ood
+
+Defaults in `reflex_sentry.gold.sample`. Candidate pools shrunk to 400 each so fewer rows are withheld from training. Expect recall confidence intervals of roughly plus or minus 6 points; check the dangerous count per gold set after the rebuild and enlarge if it falls much below 60.
+
+### 2026-09-27: two-tier keyword prefilter
+
+The first real build showed everyday words (vulnerable, breach, exploit, malicious, injection) pulling in non-cyber prompts, mostly from OR-Bench, while casual attack phrasing ("hack into my ex's instagram") was missed. Keyword lines can now be `weak:`; a prompt is in scope with one strong hit or two distinct weak hits. Casual hacking and account-takeover phrasings were added as strong regexes.
 
 ### 2026-09-27: data/ stays out of git
 

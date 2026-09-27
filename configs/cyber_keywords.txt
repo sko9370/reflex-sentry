@@ -9,22 +9,37 @@
 # Used here for identifier formats rather than words: CVE ids, Microsoft security
 # bulletin numbers, and MITRE ATT&CK technique ids. See the "identifiers" section below.
 #
+# TWO-TIER MATCHING: a line prefixed "weak:" (or "weak:re:" for a weak regex) is a weak
+# keyword rather than a strong one. A row is in scope if it has at least 1 STRONG hit (an
+# unprefixed line), OR at least 2 DISTINCT WEAK hits -- a single weak hit alone is not
+# enough. This exists because some cyber-relevant words are also ordinary English words
+# outside any security context ("vulnerable", "exploit", "breach", "compromised", ...):
+# alone they are too noisy to trust, but two of them together in the same prompt are a
+# much stronger signal than either alone. See reflex_sentry/data/prefilter.py and
+# docs/DATA_CONTRACT.md for exactly how kw_strong / kw_weak / in_scope are computed.
+#
 # This is a RECALL-oriented filter: it is meant to catch both offensive and defensive
 # cyber vocabulary (README 4.1: keyword prefilter, then manual/zero-shot review), so
 # downstream labeling has dangerous, hard-negative, and ambiguous candidates to work
 # with. It deliberately still avoids bare words that would match almost any prompt
 # (e.g. "key", "secure", "access", "target", "network", or bare "attack"/"hack" on
 # their own); those only appear as part of a more specific phrase or a less ambiguous
-# form ("attacker", "attacks on", "hacker", "hacked"). Everything else errs toward
+# form ("attacker", "hacker", "hacked"). Everything else errs toward
 # inclusion, including short/specific single tokens and common inflections, because a
 # missed row here never reaches manual review at all. Tune this list as you label: add
-# terms the prefilter is missing, remove ones that only add noise.
+# terms the prefilter is missing, remove ones that only add noise -- and prefer "weak:"
+# over dropping a term entirely when it's ambiguous alone but still worth catching in
+# combination with something else.
 
 # --- malware ---------------------------------------------------------------
 malware
-malicious
+weak:malicious  # ambiguous alone: "a malicious rumor", "malicious compliance" (non-cyber)
 ransomware
 spyware
+# judgment call: bare "trojan"/"worm"/"shell"/"payload" are NOT listed on their own
+# (too generic -- wooden horse, garden worm, seashell, delivery payload, etc.); only
+# the specific compound forms below are kept, and kept strong since each compound is
+# already cyber-specific enough on its own.
 trojan horse
 rat payload
 remote access trojan
@@ -38,7 +53,7 @@ dropper
 stealer malware
 info stealer
 infostealer
-backdoor
+weak:backdoor  # judgment call: also common as "backdoor deal/route" outside security
 webshell
 web shell
 c2
@@ -87,19 +102,22 @@ clop
 cl0p
 
 # --- exploitation ------------------------------------------------------------
-exploit
-exploits
-exploited
-exploiting
+# bare exploit/exploited/exploiting/vulnerable/vulnerability/vulnerabilities are weak:
+# all of them are everyday English too ("exploit a loophole", "vulnerable populations",
+# "an emotionally vulnerable moment"). The specific compounds below them stay strong.
+weak:exploit
+weak:exploits
+weak:exploited
+weak:exploiting
 exploit code
 proof of concept exploit
 poc exploit
 zero-day
 0day
 n-day exploit
-vulnerability
-vulnerabilities
-vulnerable
+weak:vulnerability
+weak:vulnerabilities
+weak:vulnerable
 buffer overflow
 stack-based buffer overflow
 heap-based buffer overflow
@@ -109,7 +127,7 @@ use after free
 format string vulnerability
 sql injection
 sqli
-injection
+weak:injection  # ambiguous alone: medical injection, dependency injection, fuel injection
 parameterized query
 sanitize user input
 command injection
@@ -169,7 +187,11 @@ clickjacking
 open redirect
 unvalidated redirect
 cors misconfiguration
+weak:cors  # narrow tech acronym (cross-origin resource sharing), but not exclusively a
+           # security topic on its own (plain CORS config/debugging questions exist too)
 jwt algorithm confusion
+weak:jwt  # narrow tech acronym (JSON Web Token); security-adjacent but not always
+weak:oauth  # narrow protocol name; security-adjacent but not always ("set up oauth login")
 kernel exploit
 driver exploit
 supply chain attack
@@ -202,8 +224,8 @@ cisa kev
 known exploited vulnerabilities catalog
 
 # --- credentials -------------------------------------------------------------
-credential
-credentials
+weak:credential  # ambiguous alone: professional/academic "credentials" (a resume, a degree)
+weak:credentials
 credential theft
 credential stuffing
 credential harvesting
@@ -214,6 +236,8 @@ hardcoded password
 hardcoded api key
 leaked credentials
 exposed credentials
+# judgment call: bare "cracking" is not listed alone (safe cracking, joke cracking,
+# knuckle cracking); the specific compounds below stay strong.
 password cracking
 password brute force
 brute force login
@@ -243,6 +267,7 @@ account lockout
 2fa bypass
 mfa bypass
 otp bypass
+weak:identity theft  # usually cyber-adjacent but not exclusively (also physical-document theft)
 
 # --- phishing / social engineering --------------------------------------------
 phishing
@@ -283,6 +308,8 @@ reflection attack
 booter service
 stresser service
 mirai botnet
+# judgment call: bare "spoofing"/"sniffing" are not listed alone (caller-id spoofing
+# jokes, comedic "spoofing" of a movie, dogs sniffing); the compounds below stay strong.
 arp spoofing
 arp poisoning
 dns spoofing
@@ -304,17 +331,19 @@ masscan
 network reconnaissance
 vulnerability scanner
 vulnerability scanning
+re:vuln scans?  # common informal abbreviation for "vulnerability scan(s)" among engineers
 subdomain enumeration
 banner grabbing
 
 # --- intrusion / lateral movement ------------------------------------------------
 lateral movement
 pivoting network
-persistence
-persistence mechanism
+weak:persistence  # ambiguous alone: general character trait ("persistence pays off")
+re:persistence mechanisms?
 maintain persistence
 data exfiltration
 exfiltration
+exfiltrated
 exfiltrate data
 covert channel
 c2 beacon
@@ -324,16 +353,24 @@ domain fronting
 living off the land
 lolbin
 lolbins
-unauthorized access
-gain unauthorized access
-breach
+weak:unauthorized access
+weak:gain unauthorized access
+weak:breach  # ambiguous alone: "breach of contract/etiquette", dam/hull breach
+weak:breached
 breach a network
-compromised
+weak:compromised  # ambiguous alone: "compromised on the price", "morally compromised"
+# strong even though bare "compromised" is weak: "a compromised <system-ish noun>" is a
+# much more specific pattern than the bare adjective alone (covers "a compromised cloud
+# VM", "a compromised third-party vendor account", etc., not just "compromise a server").
+re:compromised .{0,30}(?:account|server|system|device|host|machine|endpoint|workstation|vm|environment|network|database|service)
 compromise a server
 compromise an account
 insider threat attack
 supply chain compromise
 watering hole attack
+weak:surveillance  # ambiguous alone: physical/CCTV surveillance, not necessarily cyber
+weak:tracking  # ambiguous alone: shipment tracking, fitness tracking, etc.
+weak:virus  # ambiguous alone: biological virus; "computer virus" below stays strong
 advanced persistent threat
 apt group
 nation state hacking
@@ -492,7 +529,7 @@ endpoint detection and response
 # --- attacker / general vocabulary ----------------------------------------------
 attacker
 attackers
-attacks on
+weak:attacks on  # ambiguous alone: "attacks on his character/credibility", sports commentary
 hacker
 hackers
 hacked
@@ -581,6 +618,33 @@ dnp3
 bacnet
 profinet
 cloud misconfiguration
+
+# --- casual / colloquial attack phrasing --------------------------------------------
+# Real users and human red-teamers rarely say "gain unauthorized access to a system";
+# they say things like "hack into my ex's instagram" or "get into someone's email".
+# These are strong (specific enough to the target-a-person's-account pattern) but
+# deliberately narrow: a bare "hack"/"hacks" is NOT added on its own (see
+# tests/test_data_pipeline.py negative cases for "life hack", "a quick hack to peel
+# garlic" -- those must NOT match). Every line below requires "hack"/"hacking"/"hacks"
+# to be immediately followed by a person/possessive/target word, not just any word,
+# which is what keeps "hack the deadline", "a quick hack to ..." out.
+re:hack(?:ing|s)? (?:someone'?s|somebody'?s|my (?:ex|wife|husband|girlfriend|boyfriend|neighbor|boss|friend)'?s?|their|his|her|a|an|the|into)
+hack into
+# Added after spot check: "hack my school's grading system" was missed. Possessive after
+# my/our/your, and hack + a device/account/system noun. Life-hack senses ("hack my morning
+# routine") can still slip through; out_of_scope in gold labeling absorbs those.
+re:hack(?:ing|ed|s)? (?:my|our|your) \w+'s
+re:hack(?:ing|ed|s)? (?:(?:my|our|your|his|her|their|a|an|the|someone'?s|somebody'?s) )?(?:phone|iphone|android|computer|laptop|pc|mac|account|accounts|email|gmail|wifi|wi-fi|router|website|site|server|database|network|camera|webcam|car|atm|bank|game|console|xbox|playstation|snapchat|instagram|facebook|tiktok|discord|twitter|whatsapp|roblox|fortnite|grades?|grading system|school system|system|app)\b
+re:break into (?:someone'?s|their|his|her|my \w+'s) (?:email|account|phone|computer|laptop|wifi|facebook|instagram)
+re:(?:someone'?s|somebody'?s|their|his|her|my \w+'s) (?:password|email account|facebook|instagram|snapchat|icloud|gmail)
+wifi password
+re:password (?:to|for) (?:someone|somebody|their|his|her)
+re:get into (?:someone'?s|their|his|her|my \w+'s) (?:email|account|phone|computer)
+re:spy on .{0,30}(?:phone|texts|messages|computer|email)
+re:track (?:someone'?s|their|his|her|my \w+'s) (?:phone|location)
+re:steal (?:(?:someone'?s|their|his|her) )?(?:password|identity|data|account|credit card)
+weak:credit card numbers  # weak: also comes up in ordinary fraud/finance-safety talk
+make a virus
 
 # --- identifiers (regex) -----------------------------------------------------------
 # CVE ids (e.g. CVE-2021-44228), Microsoft security bulletin numbers (e.g. MS17-010),

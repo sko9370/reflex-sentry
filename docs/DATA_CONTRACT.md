@@ -61,14 +61,24 @@ all in `schema.SOURCES`, `id` is unique and matches the `"<source>:<12 hex>"` pa
 combined case-insensitively and word-boundary-wrapped like every other line -- see
 `prefilter.load_keywords`/`prefilter.compile_pattern`.
 
+**Two-tier matching**: a line prefixed `weak:` (or `weak:re:` for a weak regex) is a
+*weak* keyword rather than a strong one. A row is in scope if it has at least 1 STRONG
+hit, OR at least 2 DISTINCT WEAK hits -- a single weak hit alone is not enough. This
+covers cyber-relevant words that are also ordinary English outside any security context
+("vulnerable", "exploit", "breach", "compromised", ...): alone they're too noisy to
+trust, but two of them together in the same prompt are a much stronger signal than
+either alone. See `prefilter.split_tiers`/`prefilter.prefilter`.
+
 ## Scoped pool: `data/interim/cyber_pool.parquet`
 
 `pool.parquet` plus (`schema.CYBER_EXTRA_COLUMNS`):
 
 | Column | Type | Notes |
 |---|---|---|
-| `in_scope` | bool | Whether the keyword prefilter (`prefilter.prefilter`, `configs/cyber_keywords.txt`) matched this row, OR the row's `source` is listed in `configs/data.yaml`'s `prefilter_bypass_sources` (see below). Only `in_scope == True` rows are kept in `cyber_pool.parquet`; the rest are dropped after the summary is printed, they never reach `data/processed/`. |
-| `kw_hits` | str | Semicolon-joined matched keywords/phrases (lowercased), `""` if none -- including for a bypassed row that had no keyword hit at all. |
+| `in_scope` | bool | `kw_strong >= 1` OR `kw_weak >= 2` (the keyword prefilter, `prefilter.prefilter`, `configs/cyber_keywords.txt`), OR the row's `source` is listed in `configs/data.yaml`'s `prefilter_bypass_sources` (see below). Only `in_scope == True` rows are kept in `cyber_pool.parquet`; the rest are dropped after the summary is printed, they never reach `data/processed/`. |
+| `kw_hits` | str | Semicolon-joined matched keywords/phrases (lowercased) from EITHER tier, `""` if none -- including for a bypassed row that had no keyword hit at all. |
+| `kw_strong` | int | Count of distinct strong-tier keyword hits (unprefixed lines in `configs/cyber_keywords.txt`). |
+| `kw_weak` | int | Count of distinct weak-tier keyword hits (`weak:`-prefixed lines). |
 | `dup_group` | str | An `id` value: the smallest `id` among all rows judged to be exact- or near-duplicates of this one (`dedupe.exact_dedupe` + `dedupe.near_dup_groups`). A row with no duplicates is its own group (`dup_group == id`). |
 
 Build order for this file (`build.run`): prefilter the pool -> keep `in_scope` rows only ->

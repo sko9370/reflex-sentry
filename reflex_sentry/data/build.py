@@ -17,7 +17,7 @@ import yaml
 
 from . import loaders, schema
 from .dedupe import exact_dedupe, near_dup_groups
-from .prefilter import hit_counts_by_source, load_keywords, prefilter
+from .prefilter import hit_counts_by_source, load_keywords, prefilter, scope_reason_counts_by_source
 from .split import add_split
 
 
@@ -92,6 +92,9 @@ def run(config: dict, sources: list[str] | None, stats_only: bool) -> dict:
     scoped = prefilter(pool, keywords)
 
     bypass_sources = set(config.get("prefilter_bypass_sources") or [])
+    # scope_reason_counts_by_source needs kw_strong/kw_weak as prefilter.prefilter left
+    # them, before in_scope gets forced true below for bypassed rows.
+    reason_table = scope_reason_counts_by_source(scoped, bypass_sources)
     if bypass_sources:
         bypassed = scoped["source"].isin(bypass_sources) & ~scoped["in_scope"]
         n_bypassed = int(bypassed.sum())
@@ -104,6 +107,8 @@ def run(config: dict, sources: list[str] | None, stats_only: bool) -> dict:
 
     print(f"\n== prefilter: {int(scoped['in_scope'].sum())} / {len(scoped)} in scope ==")
     print(hit_counts_by_source(scoped).to_string(index=False))
+    print("\n== in-scope rows by source and reason (strong hit / weak pair / bypass) ==")
+    print(reason_table.to_string(index=False))
 
     cyber = scoped[scoped["in_scope"]].reset_index(drop=True)
     preference = config.get("dedupe_preference") or list(schema.SOURCES)

@@ -39,7 +39,9 @@ POOL_COLUMNS = (
 )
 
 # Extra columns added by prefilter.py + dedupe.py -> data/interim/cyber_pool.parquet
-CYBER_EXTRA_COLUMNS = ("in_scope", "kw_hits", "dup_group")
+# kw_strong/kw_weak: distinct-hit counts per tier (see prefilter.py's two-tier
+# matching); in_scope is True when kw_strong >= 1 or kw_weak >= 2.
+CYBER_EXTRA_COLUMNS = ("in_scope", "kw_hits", "kw_strong", "kw_weak", "dup_group")
 
 # Extra column added by split.py -> data/processed/{train,val_pool,test_pool,test_ood_pool}.parquet
 SPLIT_EXTRA_COLUMNS = ("split",)

@@ -41,13 +41,17 @@ dedupe_threshold: 0.8
 # hand labeling, not final gold set sizes; expect to drop some as unusable during labeling.
 split:
   # Entire source(s) held out for test_ood_pool, never trained/validated/tested on otherwise.
-  # A list, so more than one source can be held out; the older singular `ood_source: <name>`
-  # (a plain string) is still accepted for backward compat if a config still uses it. Left at
-  # just toxic_chat for now -- revisit once `python -m reflex_sentry.data.inspect` shows the
-  # per-source counts, in case a second source (e.g. xstest) is worth holding out too.
+  # A list, so more than one source can be held out (the older singular `ood_source: <name>`
+  # string is still accepted). Chosen 2026-09-27 after the first real build: toxic_chat alone
+  # gave only 78 in-scope candidates, so all four small sources are held out together (real
+  # users, human red-teamers, two crowd-annotated sets). They contributed <4% of train rows.
   ood_sources:
     - toxic_chat
-  val_pool_size: 600
-  test_pool_size: 600
+    - aegis2
+    - hh_redteam
+    - beavertails
+  # Candidates per pool; 300 items are hand-labeled from each (reflex_sentry.gold.sample defaults).
+  val_pool_size: 400
+  test_pool_size: 400
   test_ood_pool_size: 600
   hn_pool_ratio: 0.8            # share of hn_seed rows routed to val_pool/test_pool vs train

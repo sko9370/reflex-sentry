@@ -2,6 +2,7 @@
 
     python -m reflex_sentry.data.inspect
     python -m reflex_sentry.data.inspect --processed data/processed --interim data/interim
+    python -m reflex_sentry.data.inspect --per-source
     python -m reflex_sentry.data.inspect --show 5 --source aegis2 --keyword ransomware
 
 Prints two summaries that only ever need aggregate counts, never a row's own text:
@@ -13,9 +14,14 @@ Prints two summaries that only ever need aggregate counts, never a row's own tex
 2. The top `--top-n` (default 40) `kw_hits` keywords by frequency among in-scope rows from
    public sources (i.e. everything in `data/interim/cyber_pool.parquet` except `hn_seed`,
    which is hand-written, not scraped), with each keyword's "sole-hit share": the fraction of
-   its matching rows where it was the *only* keyword that matched. A generic word with a high
-   sole-hit share and high frequency is a prefilter precision risk worth a manual look with
-   `--show`.
+   its matching rows where it was the *only* keyword that matched, and its tier (strong/weak,
+   re-derived from `--keywords`, default `configs/cyber_keywords.txt`). A generic word with a
+   high sole-hit share and high frequency is a prefilter precision risk worth a manual look
+   with `--show`; a weak-tier one there is expected (a weak hit is only ever "sole" together
+   with a source-level bypass or something odd, since two weak hits are required for scope).
+   Pass `--per-source` to print this table separately per source (default top 15 each)
+   instead of one combined top-N table, since a single dominant source can otherwise crowd
+   every other source's keywords out.
 
 `--show N --source S --keyword K` is the only thing that ever prints row text, and only when
 explicitly asked for: up to N sample texts (each truncated to 200 chars) from `cyber_pool`
@@ -29,8 +35,10 @@ from pathlib import Path
 import pandas as pd
 
 from . import schema
+from .prefilter import compile_pattern, load_keywords, split_tiers
 
 TEXT_PREVIEW_CHARS = 200
+DEFAULT_PER_SOURCE_TOP_N = 15
 
 
 def _warn(msg: str) -> None:
@@ -95,12 +103,50 @@ def print_split_source_summary(df: pd.DataFrame) -> None:
     print(totals.to_string(formatters={"mean_source_label": "{:.3f}".format}))
 
 
-def keyword_frequency_table(cyber_df: pd.DataFrame, top_n: int = 40) -> pd.DataFrame:
+class TierLookup:
+    """Classifies a matched kw_hits string as "strong" or "weak" by re-matching it
+    against configs/cyber_keywords.txt's own strong/weak patterns (kw_hits only stores
+    the matched text, not which tier or which configured line produced it)."""
+
+    def __init__(self, keywords_path: str | Path):
+        keywords = load_keywords(keywords_path)
+        strong_kw, weak_kw = split_tiers(keywords)
+        self._strong = compile_pattern(strong_kw) if strong_kw else None
+        self._weak = compile_pattern(weak_kw) if weak_kw else None
+
+    def __call__(self, hit: str) -> str:
+        if self._strong is not None and self._strong.fullmatch(hit):
+            return "strong"
+        if self._weak is not None and self._weak.fullmatch(hit):
+            return "weak"
+        return "?"
+
+
+def load_tier_lookup(keywords_path: str | Path) -> TierLookup | None:
+    """`TierLookup` for `keywords_path`, or None (with a warning) if it can't be loaded --
+    e.g. the keywords file has since changed or moved. Tier annotation is best-effort."""
+    try:
+        return TierLookup(keywords_path)
+    except (OSError, ValueError) as exc:
+        _warn(f"could not load {keywords_path} for tier lookup: {exc}")
+        return None
+
+
+def keyword_frequency_table(
+    cyber_df: pd.DataFrame, top_n: int = 40, tier_lookup: TierLookup | None = None
+) -> pd.DataFrame:
     """Top `top_n` kw_hits keywords by frequency among in-scope public-source rows (every
     source except hn_seed), with each keyword's sole-hit share: the fraction of rows it
     matched in where it was the ONLY keyword that matched. A frequent keyword with a high
     sole-hit share and a generic meaning is a likely prefilter precision problem -- it's
-    single-handedly pulling in rows nothing else about them says are cyber-relevant."""
+    single-handedly pulling in rows nothing else about them says are cyber-relevant.
+
+    When `tier_lookup` is given, a "tier" column (strong/weak/?) is added, so a weak
+    keyword's sole-hit share can be read correctly: a weak hit is never in scope by
+    itself, so "sole_hit_share" there means "co-occurred with nothing else, so this row
+    is only in scope because some OTHER row-level source (a second weak hit elsewhere in
+    the same text, or a bypass) put it there" -- worth a second look either way.
+    """
     public = cyber_df[cyber_df["source"] != "hn_seed"]
     if "in_scope" in public.columns:
         public = public[public["in_scope"]]
@@ -122,10 +168,32 @@ def keyword_frequency_table(cyber_df: pd.DataFrame, top_n: int = 40) -> pd.DataF
         }
         for k, n in counts.items()
     ]
-    table = pd.DataFrame(rows, columns=["keyword", "rows", "sole_hit_share"])
+    columns = ["keyword", "rows", "sole_hit_share"]
+    if tier_lookup is not None:
+        for row in rows:
+            row["tier"] = tier_lookup(row["keyword"])
+        columns.append("tier")
+    table = pd.DataFrame(rows, columns=columns)
     if table.empty:
         return table
     return table.sort_values(["rows", "keyword"], ascending=[False, True]).head(top_n).reset_index(drop=True)
+
+
+def keyword_frequency_table_per_source(
+    cyber_df: pd.DataFrame, top_n: int = DEFAULT_PER_SOURCE_TOP_N, tier_lookup: TierLookup | None = None
+) -> dict[str, pd.DataFrame]:
+    """Same as `keyword_frequency_table`, computed separately per source (excl. hn_seed),
+    each capped at its own top `top_n` -- useful because one dominant source (e.g.
+    or_bench, per docs/DATA_CONTRACT.md) can otherwise crowd every other source's
+    keywords out of a single combined top-N table."""
+    public = cyber_df[cyber_df["source"] != "hn_seed"]
+    if "in_scope" in public.columns:
+        public = public[public["in_scope"]]
+    tables = {}
+    for source in sorted(public["source"].unique()):
+        sub = public[public["source"] == source]
+        tables[source] = keyword_frequency_table(sub, top_n=top_n, tier_lookup=tier_lookup)
+    return tables
 
 
 def print_keyword_table(table: pd.DataFrame, top_n: int) -> None:
@@ -136,6 +204,19 @@ def print_keyword_table(table: pd.DataFrame, top_n: int) -> None:
         print("  (no in-scope public-source rows with any keyword hit)")
         return
     print(table.to_string(index=False))
+
+
+def print_per_source_keyword_tables(tables: dict[str, pd.DataFrame], top_n: int) -> None:
+    print(f"\n== top {top_n} kw_hits keywords per source, in-scope rows (excl. hn_seed) ==")
+    if not tables:
+        print("  (no in-scope public-source rows with any keyword hit)")
+        return
+    for source, table in tables.items():
+        print(f"\n-- {source} --")
+        if table.empty:
+            print("  (no in-scope rows with any keyword hit)")
+            continue
+        print(table.to_string(index=False))
 
 
 def show_samples(cyber_df: pd.DataFrame, source: str, keyword: str, n: int) -> None:
@@ -159,7 +240,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--processed", default="data/processed", help="dir with {split}.parquet files")
     ap.add_argument("--interim", default="data/interim", help="dir with cyber_pool.parquet")
-    ap.add_argument("--top-n", type=int, default=40, help="how many keywords to list (default 40)")
+    ap.add_argument("--top-n", type=int, default=None,
+                     help="how many keywords to list (default 40, or "
+                          f"{DEFAULT_PER_SOURCE_TOP_N} per source with --per-source)")
+    ap.add_argument("--keywords", default="configs/cyber_keywords.txt",
+                     help="keyword file, used to label each keyword's strong/weak tier")
+    ap.add_argument("--per-source", action="store_true",
+                     help=f"print the keyword table separately per source, top "
+                          f"{DEFAULT_PER_SOURCE_TOP_N} each by default (see --top-n)")
     ap.add_argument("--show", type=int, default=0, metavar="N",
                      help="print up to N sample texts (200 chars each) for --source/--keyword")
     ap.add_argument("--source", help="source to sample from, required with --show")
@@ -171,8 +259,15 @@ def main() -> None:
 
     cyber = load_cyber_pool(args.interim)
     if cyber is not None:
-        table = keyword_frequency_table(cyber, top_n=args.top_n)
-        print_keyword_table(table, top_n=args.top_n)
+        tier_lookup = load_tier_lookup(args.keywords)
+        if args.per_source:
+            top_n = args.top_n if args.top_n is not None else DEFAULT_PER_SOURCE_TOP_N
+            tables = keyword_frequency_table_per_source(cyber, top_n=top_n, tier_lookup=tier_lookup)
+            print_per_source_keyword_tables(tables, top_n=top_n)
+        else:
+            top_n = args.top_n if args.top_n is not None else 40
+            table = keyword_frequency_table(cyber, top_n=top_n, tier_lookup=tier_lookup)
+            print_keyword_table(table, top_n=top_n)
 
     if args.show:
         if cyber is None:
