@@ -4,15 +4,25 @@
 # ignored. Matching is case-insensitive and word-boundary aware (see prefilter.py), so
 # multiword phrases match as a unit and short words don't match inside longer ones.
 #
+# A line prefixed with "re:" is a raw regex fragment instead of a literal phrase (still
+# combined case-insensitively and word-boundary wrapped around the whole alternation).
+# Used here for identifier formats rather than words: CVE ids, Microsoft security
+# bulletin numbers, and MITRE ATT&CK technique ids. See the "identifiers" section below.
+#
 # This is a RECALL-oriented filter: it is meant to catch both offensive and defensive
-# cyber vocabulary, so downstream labeling has dangerous, hard-negative, and ambiguous
-# candidates to work with. Deliberately avoids very generic single words that would match
-# almost any prompt (e.g. bare "key", "attack", "hack", "secure", "access", "target",
-# "network"); those only appear here as part of a more specific phrase. Tune this list as
-# you label: add terms the prefilter is missing, remove ones that only add noise.
+# cyber vocabulary (README 4.1: keyword prefilter, then manual/zero-shot review), so
+# downstream labeling has dangerous, hard-negative, and ambiguous candidates to work
+# with. It deliberately still avoids bare words that would match almost any prompt
+# (e.g. "key", "secure", "access", "target", "network", or bare "attack"/"hack" on
+# their own); those only appear as part of a more specific phrase or a less ambiguous
+# form ("attacker", "attacks on", "hacker", "hacked"). Everything else errs toward
+# inclusion, including short/specific single tokens and common inflections, because a
+# missed row here never reaches manual review at all. Tune this list as you label: add
+# terms the prefilter is missing, remove ones that only add noise.
 
 # --- malware ---------------------------------------------------------------
 malware
+malicious
 ransomware
 spyware
 trojan horse
@@ -31,11 +41,13 @@ infostealer
 backdoor
 webshell
 web shell
+c2
 c2 server
 c2 infrastructure
 command and control server
 botnet
 polymorphic malware
+metamorphic malware
 fileless malware
 macro malware
 malicious macro
@@ -46,30 +58,68 @@ payload obfuscation
 loader malware
 wiper malware
 cryptojacking
+crypto miner
+cryptominer
+cryptomining
 banking trojan
 mobile malware
 apk malware
+# named malware / ransomware families
+wannacry
+notpetya
+petya
+stuxnet
+emotet
+trickbot
+qakbot
+qbot
+njrat
+remcos
+asyncrat
+ryuk
+conti ransomware
+revil
+darkside
+lockbit
+blackcat
+alphv
+clop
+cl0p
 
 # --- exploitation ------------------------------------------------------------
+exploit
+exploits
+exploited
+exploiting
 exploit code
 proof of concept exploit
 poc exploit
 zero-day
 0day
 n-day exploit
-buffer overflow exploit
+vulnerability
+vulnerabilities
+vulnerable
+buffer overflow
+stack-based buffer overflow
+heap-based buffer overflow
 stack overflow exploit
 heap overflow
 use after free
 format string vulnerability
 sql injection
 sqli
+injection
+parameterized query
+sanitize user input
 command injection
 remote code execution
+rce
 rce exploit
 arbitrary code execution
 privilege escalation
 priv esc
+privesc
 local privilege escalation
 sandbox escape
 container escape
@@ -87,25 +137,83 @@ fuzzing harness
 memory corruption
 return oriented programming
 rop chain
+deserialization
+deserialize
+insecure deserialization
 deserialization vulnerability
+pickle deserialization
 path traversal
 directory traversal
+xxe
 xxe injection
+xml external entity
+ssrf
 ssrf vulnerability
 server side request forgery
+csrf
 csrf exploit
+cross site request forgery
+xss
 xss payload
 cross site scripting
+dangerouslysetinnerhtml
+idor
+lfi
+rfi
+local file inclusion
+remote file inclusion
+race condition
 race condition exploit
+toctou
+clickjacking
+open redirect
+unvalidated redirect
+cors misconfiguration
+jwt algorithm confusion
 kernel exploit
 driver exploit
 supply chain attack
 dependency confusion attack
 
+# --- named vulnerabilities / cves ---------------------------------------------
+log4shell
+spring4shell
+printnightmare
+zerologon
+eternalblue
+bluekeep
+heartbleed
+citrix bleed
+proxyshell
+proxylogon
+meltdown vulnerability
+spectre vulnerability
+shellshock
+regresshion
+petitpotam
+follina
+dirty pipe
+dirty cow
+cve
+cvss
+cve advisory
+common vulnerabilities and exposures
+cisa kev
+known exploited vulnerabilities catalog
+
 # --- credentials -------------------------------------------------------------
+credential
+credentials
 credential theft
 credential stuffing
 credential harvesting
+credential rotation
+compromised credentials
+hardcoded credentials
+hardcoded password
+hardcoded api key
+leaked credentials
+exposed credentials
 password cracking
 password brute force
 brute force login
@@ -115,6 +223,7 @@ john the ripper
 hashcat
 mimikatz
 pass the hash
+pass-the-hash
 pass the ticket
 kerberoasting
 golden ticket attack
@@ -129,11 +238,14 @@ lsass dump
 sam database dump
 dictionary attack password
 password spraying
+password hashing
+account lockout
 2fa bypass
 mfa bypass
 otp bypass
 
 # --- phishing / social engineering --------------------------------------------
+phishing
 phishing kit
 phishing email template
 spear phishing
@@ -145,6 +257,7 @@ fake login page
 clone website login
 pretexting script
 business email compromise
+bec
 impersonate a company
 impersonate a bank
 social engineering attack
@@ -159,6 +272,7 @@ homograph attack domain
 
 # --- network attack / ddos -----------------------------------------------------
 denial of service
+denial-of-service
 ddos attack
 ddos botnet
 syn flood
@@ -173,6 +287,7 @@ arp spoofing
 arp poisoning
 dns spoofing
 dns cache poisoning
+dns tunneling
 man in the middle attack
 mitm attack
 packet sniffing attack
@@ -183,6 +298,7 @@ rogue access point
 evil twin access point
 wardriving
 port scanning
+nmap
 nmap scan
 masscan
 network reconnaissance
@@ -194,19 +310,25 @@ banner grabbing
 # --- intrusion / lateral movement ------------------------------------------------
 lateral movement
 pivoting network
+persistence
 persistence mechanism
 maintain persistence
 data exfiltration
+exfiltration
 exfiltrate data
 covert channel
 c2 beacon
+beaconing
 beaconing traffic
 domain fronting
 living off the land
 lolbin
+lolbins
 unauthorized access
 gain unauthorized access
+breach
 breach a network
+compromised
 compromise a server
 compromise an account
 insider threat attack
@@ -215,6 +337,21 @@ watering hole attack
 advanced persistent threat
 apt group
 nation state hacking
+nation-state
+state-sponsored
+cyber espionage
+
+# --- threat actors / groups ----------------------------------------------------
+apt29
+cozy bear
+apt28
+fancy bear
+apt41
+lazarus group
+fin7
+sandworm
+volt typhoon
+equation group
 
 # --- evasion / anti-detection ----------------------------------------------------
 antivirus evasion
@@ -241,55 +378,107 @@ living-off-the-land binary
 timestomping
 steganography payload
 covert exfiltration channel
+amsi bypass
 
 # --- defensive / detection / IR (kept for hard negatives and dual-use terms) ---------
 detection rule
+sigma
 sigma rule
+yara
 yara rule
+snort
 snort rule
+suricata
 suricata rule
 ids signature
 ips signature
+edr
 edr telemetry
+siem
 siem alert
+soc
+soc analyst
+xdr
+dfir
+forensics
+digital forensics
+forensic image
+memory forensics
+disk forensics
+chain of custody
 threat hunting
+threat intel
 threat intelligence
+threat actor
 threat actor profile
+threat landscape
+threat report
+cti
 mitre att&ck
 att&ck technique
+kill chain
+cyber kill chain
+diamond model
+pyramid of pain
+ttp
+ttps
+ioc
+iocs
 indicators of compromise
 ioc list
+misp
+opencti
+stix
+taxii
+isac
+dwell time
+honeytoken
+honeypot
+ueba
+dga
+domain generation algorithm
+impossible travel
+webinject
+sinkhole domain
 malware analysis
 reverse engineering a sample
 static analysis of a binary
 dynamic malware analysis
 sandbox report
+volatility
+incident response
 incident response plan
 incident response playbook
-digital forensics
-forensic image
-memory forensics
-disk forensics
+cyber insurance
 log analysis
 security operations center
-soc analyst
 vulnerability management
 patch management
 secure code review
 secure coding practices
 threat model
+penetration test
 penetration test report
+pentest
 authorized penetration test
+red team
 red team engagement
+blue team
 blue team exercise
 purple team exercise
 capture the flag
+ctf
 ctf challenge
+hackthebox
+tryhackme
+oscp
+gpen
+gcih
+ceh
+security+
 security awareness training
 bug bounty report
 responsible disclosure
-cve advisory
-common vulnerabilities and exposures
 patch a vulnerability
 harden a server
 security hardening
@@ -300,11 +489,21 @@ zero trust architecture
 data loss prevention
 endpoint detection and response
 
+# --- attacker / general vocabulary ----------------------------------------------
+attacker
+attackers
+attacks on
+hacker
+hackers
+hacked
+hacking
+
 # --- tools -----------------------------------------------------------------------
 nmap
 metasploit
 mimikatz
 cobalt strike
+burp
 burp suite
 wireshark
 nessus
@@ -317,8 +516,9 @@ john the ripper
 hashcat
 empire c2
 covenant c2
+bloodhound
 bloodhound ad
-responder tool
+responder
 impacket
 netcat reverse shell
 ncat
@@ -327,6 +527,36 @@ dirbuster
 shodan search
 censys search
 maltego
+kali
+kali linux
+metasploitable
+metasploitable2
+pfsense
+sysmon
+splunk
+microsoft sentinel
+crowdstrike
+velociraptor
+enum4linux
+juice shop
+diva
+insecurebankv2
+
+# --- cloud / iam security ---------------------------------------------------------
+iam policy
+iam role
+least privilege
+overpermissive
+over-permissive
+s3 bucket
+s3 bucket exposure
+api key leak
+secrets leak
+secrets management
+exposed credentials repository
+cloudtrail
+guardduty
+certificate pinning
 
 # --- protocols / infrastructure terms often paired with attacks -------------------
 smb exploit
@@ -337,15 +567,24 @@ ftp exploit
 telnet exploit
 active directory attack
 ldap injection
-dns tunneling
 icmp tunneling
 vpn exploit
 iot botnet
+scada
 scada attack
+ics
 ics attack
+plc
 plc attack
+modbus
+dnp3
+bacnet
+profinet
 cloud misconfiguration
-s3 bucket exposure
-api key leak
-secrets leak
-exposed credentials repository
+
+# --- identifiers (regex) -----------------------------------------------------------
+# CVE ids (e.g. CVE-2021-44228), Microsoft security bulletin numbers (e.g. MS17-010),
+# and MITRE ATT&CK technique ids (e.g. T1055 or T1055.001).
+re:cve-\d{4}-\d{4,}
+re:ms\d{2}-\d{3}
+re:t\d{4}(\.\d{3})?

@@ -56,14 +56,19 @@ space, strip. Used for `make_id` and for dedupe; never mutates the `text` column
 all in `schema.SOURCES`, `id` is unique and matches the `"<source>:<12 hex>"` pattern,
 `source_label` is only `0.0`/`1.0`/`NaN`, and `tags` has no `NaN` (empty string only).
 
+`configs/cyber_keywords.txt` is mostly literal terms/phrases, but a line prefixed
+`re:` is a raw regex fragment instead (e.g. `re:cve-\d{4}-\d{4,}` for CVE ids), still
+combined case-insensitively and word-boundary-wrapped like every other line -- see
+`prefilter.load_keywords`/`prefilter.compile_pattern`.
+
 ## Scoped pool: `data/interim/cyber_pool.parquet`
 
 `pool.parquet` plus (`schema.CYBER_EXTRA_COLUMNS`):
 
 | Column | Type | Notes |
 |---|---|---|
-| `in_scope` | bool | Whether the keyword prefilter (`prefilter.prefilter`, `configs/cyber_keywords.txt`) matched this row. Only `in_scope == True` rows are kept in `cyber_pool.parquet`; the rest are dropped after the summary is printed, they never reach `data/processed/`. |
-| `kw_hits` | str | Semicolon-joined matched keywords/phrases (lowercased), `""` if none. |
+| `in_scope` | bool | Whether the keyword prefilter (`prefilter.prefilter`, `configs/cyber_keywords.txt`) matched this row, OR the row's `source` is listed in `configs/data.yaml`'s `prefilter_bypass_sources` (see below). Only `in_scope == True` rows are kept in `cyber_pool.parquet`; the rest are dropped after the summary is printed, they never reach `data/processed/`. |
+| `kw_hits` | str | Semicolon-joined matched keywords/phrases (lowercased), `""` if none -- including for a bypassed row that had no keyword hit at all. |
 | `dup_group` | str | An `id` value: the smallest `id` among all rows judged to be exact- or near-duplicates of this one (`dedupe.exact_dedupe` + `dedupe.near_dup_groups`). A row with no duplicates is its own group (`dup_group == id`). |
 
 Build order for this file (`build.run`): prefilter the pool -> keep `in_scope` rows only ->
@@ -114,7 +119,9 @@ Not produced by this package. See README 5.1: columns `id, gold, p_safe, p_dange
 ## Config: `configs/data.yaml`
 
 Read by `reflex_sentry.data.build.load_config`. Keys: `seed`, `raw_dir`, `interim_dir`,
-`processed_dir`, `hn_seed_path`, `keywords_path`, `dedupe_preference` (list of source names, most
+`processed_dir`, `hn_seed_path`, `keywords_path`, `prefilter_bypass_sources` (list of source
+names; every row from these sources gets `in_scope=True` regardless of keyword hits, `kw_hits`
+still recorded -- default: none), `dedupe_preference` (list of source names, most
 to least preferred), `shingle_k`, `minhash_perm`, `minhash_bands`, `dedupe_threshold`, and a
 `split` block (`ood_source`, `val_pool_size`, `test_pool_size`, `test_ood_pool_size`,
 `hn_pool_ratio`). Every key has a built-in default (`split.DEFAULTS` /

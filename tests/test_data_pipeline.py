@@ -314,6 +314,34 @@ def test_prefilter_word_boundary_and_hits(keywords_file):
     assert out.loc[out["id"] == "c", "in_scope"].item() is False
 
 
+def test_prefilter_regex_line_matches_cve_and_attck_id(tmp_path):
+    p = tmp_path / "cyber_keywords.txt"
+    p.write_text(
+        "# test keywords with regex lines\n"
+        "ransomware\n"
+        "re:cve-\\d{4}-\\d{4,}\n"
+        "re:t\\d{4}(\\.\\d{3})?\n",
+        encoding="utf-8",
+    )
+    keywords = prefilter.load_keywords(p)
+    df = pd.DataFrame({
+        "id": ["a", "b", "c", "d"],
+        "text": [
+            "Explain Log4Shell (CVE-2021-44228) in simple terms",   # CVE regex
+            "Map this behavior to MITRE ATT&CK technique T1055.001",  # ATT&CK sub-technique
+            "The device runs firmware T4",                          # should NOT match (too short)
+            "what is a good recipe for banana bread",               # should not match anything
+        ],
+    })
+    out = prefilter.prefilter(df, keywords)
+    assert out.loc[out["id"] == "a", "in_scope"].item() is True
+    assert "cve-2021-44228" in out.loc[out["id"] == "a", "kw_hits"].item()
+    assert out.loc[out["id"] == "b", "in_scope"].item() is True
+    assert "t1055.001" in out.loc[out["id"] == "b", "kw_hits"].item()
+    assert out.loc[out["id"] == "c", "in_scope"].item() is False
+    assert out.loc[out["id"] == "d", "in_scope"].item() is False
+
+
 def test_hit_counts_by_source(keywords_file):
     keywords = prefilter.load_keywords(keywords_file)
     df = pd.DataFrame({
@@ -325,6 +353,48 @@ def test_hit_counts_by_source(keywords_file):
     counts = prefilter.hit_counts_by_source(out)
     tc = counts[counts["source"] == "toxic_chat"].iloc[0]
     assert tc["rows"] == 2 and tc["in_scope"] == 1
+
+
+NON_CYBER_PROMPTS = [
+    "What's a good recipe for a three-cheese lasagna with bechamel sauce?",
+    "Can you help me plan a two-week itinerary for backpacking through Portugal and Spain?",
+    "I'm stuck on this algebra homework: solve for x in 3x + 7 = 22.",
+    "How do I replace the battery in my car's key fob, it's not unlocking the doors anymore?",
+    "What's the best way to train for a half marathon if I've only been running for two months?",
+    "Can you suggest a few good books for a book club that just finished a mystery novel?",
+    "How long should I let bread dough rise before baking it in a dutch oven?",
+    "What's a good beginner-friendly houseplant for a north-facing apartment window?",
+    "Explain the difference between mitosis and meiosis for my biology final.",
+    "What's a fun science fair project idea for a 10 year old?",
+]
+
+
+def test_real_keyword_file_recall_on_hard_negative_seeds():
+    # Sanity check, not tuning: seeds/hard_negatives.csv is also eval/gold-adjacent data
+    # (see docs/DATA_CONTRACT.md), so this only checks that the shipped keyword list
+    # still has broad recall over it; it must never be hand-tuned line-by-line against
+    # these exact 315 prompts to chase a higher number here.
+    repo_root = Path(__file__).resolve().parents[1]
+    keywords = prefilter.load_keywords(repo_root / "configs" / "cyber_keywords.txt")
+    seeds = pd.read_csv(repo_root / "seeds" / "hard_negatives.csv")
+    out = prefilter.prefilter(seeds, keywords)
+    rate = out["in_scope"].mean()
+    assert rate >= 0.90, f"keyword prefilter recall on hard_negatives.csv is only {rate:.3f}"
+
+
+def test_real_keyword_file_mostly_ignores_non_cyber_prompts():
+    # Precision guard so the recall-oriented additions above don't collapse into
+    # matching nearly everything: a handful of everyday, clearly non-cyber prompts
+    # should mostly stay out of scope.
+    repo_root = Path(__file__).resolve().parents[1]
+    keywords = prefilter.load_keywords(repo_root / "configs" / "cyber_keywords.txt")
+    df = pd.DataFrame({"id": range(len(NON_CYBER_PROMPTS)), "text": NON_CYBER_PROMPTS})
+    out = prefilter.prefilter(df, keywords)
+    false_positive_rate = out["in_scope"].mean()
+    assert false_positive_rate <= 0.2, (
+        f"keyword prefilter flagged {false_positive_rate:.0%} of non-cyber prompts as "
+        f"in scope: {out.loc[out['in_scope'], 'text'].tolist()}"
+    )
 
 
 # --------------------------------------------------------------------- dedupe -----
@@ -434,6 +504,37 @@ def test_build_pool_skips_missing_source_with_warning(tmp_path, capsys):
     assert "wildguardmix" not in counts
     assert "not found" in captured.out
     assert not pool.empty
+
+
+def test_build_prefilter_bypass_sources_forces_in_scope(tmp_path, capsys):
+    hn_seed_path = tmp_path / "hard_negatives.csv"
+    _write_csv(hn_seed_path, [
+        {"id": "hn1", "text": "please deploy ransomware against our test lab",
+         "gold": "benign", "tags": "hard_negative;hn:x", "source": "hn_seed", "notes": ""},
+        {"id": "hn2", "text": "this is a routine software update reminder for staff",
+         "gold": "benign", "tags": "hard_negative;hn:x", "source": "hn_seed", "notes": ""},
+    ])
+    keywords_path = tmp_path / "cyber_keywords.txt"
+    keywords_path.write_text("ransomware\n", encoding="utf-8")  # "hn2" text has no hit
+
+    interim = tmp_path / "interim"
+    config = {
+        "raw_dir": str(tmp_path / "raw"),
+        "interim_dir": str(interim),
+        "processed_dir": str(tmp_path / "processed"),
+        "hn_seed_path": str(hn_seed_path),
+        "keywords_path": str(keywords_path),
+        "prefilter_bypass_sources": ["hn_seed"],
+    }
+    build.run(config, sources=["hn_seed"], stats_only=False)
+    captured = capsys.readouterr()
+    assert "prefilter_bypass_sources" in captured.out
+
+    cyber = pd.read_parquet(interim / "cyber_pool.parquet")
+    assert len(cyber) == 2  # both rows in scope, including the one with no keyword hit
+    assert cyber["in_scope"].all()
+    no_hit_row = cyber[cyber["text"].str.contains("routine software update")].iloc[0]
+    assert no_hit_row["kw_hits"] == ""
 
 
 def test_build_cli_end_to_end(tmp_path):

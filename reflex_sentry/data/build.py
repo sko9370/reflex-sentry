@@ -90,6 +90,18 @@ def run(config: dict, sources: list[str] | None, stats_only: bool) -> dict:
 
     keywords = load_keywords(config.get("keywords_path", "configs/cyber_keywords.txt"))
     scoped = prefilter(pool, keywords)
+
+    bypass_sources = set(config.get("prefilter_bypass_sources") or [])
+    if bypass_sources:
+        bypassed = scoped["source"].isin(bypass_sources) & ~scoped["in_scope"]
+        n_bypassed = int(bypassed.sum())
+        # kw_hits is left as-is (still records whatever the keyword list actually
+        # matched, or "" if nothing did); only in_scope is forced true.
+        scoped.loc[scoped["source"].isin(bypass_sources), "in_scope"] = True
+        if n_bypassed:
+            print(f"[info] prefilter_bypass_sources {sorted(bypass_sources)}: "
+                  f"{n_bypassed} row(s) forced in-scope with no keyword hit")
+
     print(f"\n== prefilter: {int(scoped['in_scope'].sum())} / {len(scoped)} in scope ==")
     print(hit_counts_by_source(scoped).to_string(index=False))
 
