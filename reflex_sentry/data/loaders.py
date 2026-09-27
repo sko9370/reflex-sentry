@@ -13,6 +13,7 @@ of silently mislabeling data. Verify against data/SOURCES.md after download.
 """
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from pathlib import Path
@@ -40,21 +41,68 @@ def find_data_files(raw_dir: str | Path) -> list[Path]:
     return sorted(p for p in raw_dir.rglob("*") if p.is_file() and p.name.lower().endswith(_EXTS))
 
 
+def _read_whole_json(path: Path, gz: bool) -> object:
+    """Parse an entire (optionally gzipped) file as one JSON document via the json module."""
+    opener = gzip.open if gz else open
+    with opener(path, "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _json_value_to_df(data: object, path: Path) -> pd.DataFrame:
+    """Turn a whole-file JSON value (array or object) into a DataFrame of records.
+
+    A JSON array of objects becomes one row per object. A dict with exactly one
+    list-valued key (e.g. Anthropic's hh-rlhf red_team_attempts.jsonl.gz, which is,
+    despite the ".jsonl" name, a single gzipped JSON array -- or a dict like
+    {"data": [...]}) is unwrapped to that list. Anything else is a format we don't
+    know how to flatten, so it's a loud error rather than a silently-empty frame.
+    """
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    if isinstance(data, dict):
+        list_values = [v for v in data.values() if isinstance(v, list)]
+        if len(list_values) == 1:
+            return pd.DataFrame(list_values[0])
+        if not list_values:
+            # a single JSON object with no list-valued key: treat it as one row
+            return pd.DataFrame([data])
+        raise DataFormatError(
+            f"{path}: top-level JSON object has {len(list_values)} list-valued keys "
+            f"({sorted(k for k, v in data.items() if isinstance(v, list))}); expected exactly one"
+        )
+    raise DataFormatError(f"{path}: unsupported top-level JSON type {type(data).__name__}")
+
+
 def read_table(path: Path) -> pd.DataFrame:
-    """Read one file into a DataFrame, tagging rows with their source file in "_file"."""
+    """Read one file into a DataFrame, tagging rows with their source file in "_file".
+
+    For .json/.jsonl/.jsonl.gz, JSON Lines is tried first (the common case for these
+    datasets); if that fails, the whole (decompressed) file is parsed as a single JSON
+    document instead -- some datasets ship a gzipped JSON array under a ".jsonl.gz" name
+    (e.g. Anthropic/hh-rlhf's red-team-attempts/red_team_attempts.jsonl.gz).
+    """
     name = path.name.lower()
     try:
         if name.endswith(".parquet"):
             df = pd.read_parquet(path)
         elif name.endswith(".jsonl.gz"):
-            df = pd.read_json(path, lines=True, compression="gzip")
+            try:
+                df = pd.read_json(path, lines=True, compression="gzip")
+            except ValueError:
+                df = _json_value_to_df(_read_whole_json(path, gz=True), path)
         elif name.endswith(".jsonl"):
-            df = pd.read_json(path, lines=True)
+            try:
+                df = pd.read_json(path, lines=True)
+            except ValueError:
+                df = _json_value_to_df(_read_whole_json(path, gz=False), path)
         elif name.endswith(".json"):
             try:
                 df = pd.read_json(path)
             except ValueError:
-                df = pd.read_json(path, lines=True)
+                try:
+                    df = pd.read_json(path, lines=True)
+                except ValueError:
+                    df = _json_value_to_df(_read_whole_json(path, gz=False), path)
         elif name.endswith(".csv"):
             df = pd.read_csv(path)
         else:  # pragma: no cover - find_data_files already filters extensions

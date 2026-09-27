@@ -86,9 +86,11 @@ All `cyber_pool.parquet` columns plus `split: str` (one of `schema.SPLIT_NAMES`:
 
 - Split is decided at the **`dup_group` level**, never at the row level, so near-duplicate rows
   always land in the same split.
-- One entire source (`configs/data.yaml` -> `split.ood_source`, default `toxic_chat`) is sampled
-  down to `test_ood_pool_size` candidate rows for `test_ood_pool`; the rest of that source's rows
-  are dropped entirely (never used for train, val, or test), per README 4.1.
+- One or more entire sources (`configs/data.yaml` -> `split.ood_sources`, a list, default
+  `[toxic_chat]`) are sampled down to `test_ood_pool_size` candidate rows *combined* for
+  `test_ood_pool`; the rest of those sources' rows are dropped entirely (never used for train,
+  val, or test), per README 4.1. The older singular `split.ood_source` (a plain string) is still
+  accepted for backward compat if a config sets that instead; `ood_sources` wins if both are set.
 - `hn_seed` rows are scarce and matter most for eval: a configurable share
   (`split.hn_pool_ratio`, default 0.8) is routed into `val_pool`/`test_pool` before anything else;
   only the leftover share goes to `train`.
@@ -96,6 +98,17 @@ All `cyber_pool.parquet` columns plus `split: str` (one of `schema.SPLIT_NAMES`:
   filled into `val_pool`/`test_pool` up to their configured target sizes
   (`val_pool_size`/`test_pool_size`, default 600 each -- candidate counts, not final hand-labeled
   counts), with the remainder going to `train`.
+- `val_pool` and `test_pool` are filled by **one joint pass per stratum**
+  (`split._relative_deficit_split`, apportioned by `split._apportion_stratum`'s largest-remainder
+  rounding), not by filling `val_pool` to its target first and handing `test_pool` whatever's
+  left. Filling val first meant a stratum small enough to be just one or two `dup_group`s (a rare
+  `source_category` combination -- unsafe rows tend to have a long tail of these) got claimed
+  *entirely* by `val_pool` before `test_pool`'s turn even started, silently skewing `val_pool`'s
+  label/source composition away from `test_pool`'s. Since the decision threshold is chosen on
+  `val_pool` and final numbers are reported on `test_pool`, the two pools' composition (label
+  balance and per-source shares) should match closely; the joint pass keeps them within a couple
+  of points of each other on realistic pool sizes (see
+  `tests/test_data_pipeline.py::test_split_val_and_test_pools_have_matching_composition`).
 
 `val_pool`, `test_pool`, and `test_ood_pool` are **candidates for hand labeling**, not gold data.
 The gold labels live in `data/gold/{val,test,test_ood}.csv` (owned by another agent) and get
@@ -123,6 +136,7 @@ Read by `reflex_sentry.data.build.load_config`. Keys: `seed`, `raw_dir`, `interi
 names; every row from these sources gets `in_scope=True` regardless of keyword hits, `kw_hits`
 still recorded -- default: none), `dedupe_preference` (list of source names, most
 to least preferred), `shingle_k`, `minhash_perm`, `minhash_bands`, `dedupe_threshold`, and a
-`split` block (`ood_source`, `val_pool_size`, `test_pool_size`, `test_ood_pool_size`,
-`hn_pool_ratio`). Every key has a built-in default (`split.DEFAULTS` /
-`build.build_pool`/`build.run` argument defaults), so a partial or missing config file still runs.
+`split` block (`ood_sources` -- a list, or the older singular `ood_source` string for backward
+compat -- `val_pool_size`, `test_pool_size`, `test_ood_pool_size`, `hn_pool_ratio`). Every key has
+a built-in default (`split.DEFAULTS` / `build.build_pool`/`build.run` argument defaults), so a
+partial or missing config file still runs.

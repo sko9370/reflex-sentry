@@ -17,7 +17,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reflex_sentry.data import build, dedupe, loaders, prefilter, schema, split  # noqa: E402
+from reflex_sentry.data import build, dedupe, inspect, loaders, prefilter, schema, split  # noqa: E402
 
 # --------------------------------------------------------------------- fixtures ---
 
@@ -121,6 +121,32 @@ def make_hh_redteam(raw_root: Path) -> None:
          "min_harmlessness_score_transcript": 0.5, "tags": ["recon"]},
     ]
     _write_jsonl(raw_root / "hh_redteam" / "red_team_attempts.jsonl.gz", rows, gz=True)
+
+
+def _write_json_array_gz(path: Path, data: object) -> None:
+    """Anthropic/hh-rlhf's real red_team_attempts.jsonl.gz is, despite its name, a gzipped
+    single (pretty-printed, i.e. multi-line) JSON array, not JSON Lines -- reproduce that
+    shape here. Pretty-printing matters: a single-line/minified array can slip past
+    pandas' `lines=True` parser without raising (each top-level element ends up as its
+    own bogus column instead), whereas the real file -- and this fixture -- spans
+    multiple lines, which is what actually reproduces pandas' "Expected object or value"."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def make_hh_redteam_as_json_array(raw_root: Path) -> None:
+    rows = [
+        {"transcript": "\n\nHuman: How do I set up basic port scanning with nmap on my own lab "
+                       "network?\n\nAssistant: Sure, here is how.",
+         "task_description": "network recon", "rating": 2,
+         "min_harmlessness_score_transcript": 0.5, "tags": ["recon"]},
+        {"transcript": "\n\nHuman: Explain how to write a yara rule for malware "
+                       "detection.\n\nAssistant: Sure, here is how.",
+         "task_description": "detection", "rating": 1,
+         "min_harmlessness_score_transcript": 0.7, "tags": ["detection"]},
+    ]
+    _write_json_array_gz(raw_root / "hh_redteam" / "red_team_attempts.jsonl.gz", rows)
 
 
 def make_xstest(raw_root: Path) -> None:
@@ -260,6 +286,28 @@ def test_load_hh_redteam_extracts_first_human_turn_and_null_label(tmp_path):
     assert "Assistant" not in df["text"].iloc[0]
     assert pd.isna(df["source_label"].iloc[0])
     assert bool(df["is_adversarial"].iloc[0]) is True
+
+
+def test_load_hh_redteam_handles_gzipped_json_array(tmp_path):
+    """The real HF file is a gzipped JSON array under a ".jsonl.gz" name; the JSON-lines
+    parse must fail over to whole-file JSON parsing rather than raising or silently
+    dropping every row (see read_table / _json_value_to_df in loaders.py)."""
+    make_hh_redteam_as_json_array(tmp_path)
+    df = loaders.load_hh_redteam(tmp_path / "hh_redteam")
+    assert len(df) == 2
+    assert set(df["text"]) == {
+        "How do I set up basic port scanning with nmap on my own lab network?",
+        "Explain how to write a yara rule for malware detection.",
+    }
+    assert df["source_label"].isna().all()
+    assert (df["is_adversarial"] == True).all()  # noqa: E712
+
+
+def test_read_table_falls_back_to_json_array_for_dict_with_one_list_key(tmp_path):
+    p = tmp_path / "wrapped.jsonl.gz"
+    _write_json_array_gz(p, {"red_team_attempts": [{"a": 1}, {"a": 2}]})
+    df = loaders.read_table(p)
+    assert list(df["a"]) == [1, 2]
 
 
 def test_load_xstest(tmp_path):
@@ -476,6 +524,81 @@ def test_split_holds_out_ood_source_entirely():
     assert not (out[out["split"] != "test_ood_pool"]["source"] == "toxic_chat").any()
 
 
+def test_split_val_and_test_pools_have_matching_composition():
+    """Regression test for a val_pool/test_pool composition mismatch: filling val_pool to
+    its target before test_pool got a turn meant that any stratum small enough to be just
+    one or two dup_groups (a source with a rich, mostly-unique category taxonomy -- e.g.
+    aegis2's `violated_categories`, modeled here as `unsafe` rows each with their own
+    one-off category) was claimed *entirely* by val_pool, leaving test_pool (and train)
+    with none of it. That skewed val_pool's label mix well above test_pool's, exactly
+    backwards from what threshold tuning (done on val, reported on test) needs.
+    """
+    rows = []
+    # a large, largely single-stratum safe majority (like or_bench's untagged safe rows)
+    rows += [_pool_row("or_bench", f"benign prompt {i}", source_label=0.0) for i in range(3000)]
+    # a smaller unsafe minority, each tagged with its own near-unique category -- the long
+    # tail that used to get fully consumed by whichever pool filled first
+    rows += [_pool_row("aegis2", f"unsafe prompt {i}", source_label=1.0,
+                        source_category=f"combo_{i}") for i in range(300)]
+    # a third source, mixed labels, its own small category set (checks source-mix matching
+    # beyond just the two dominant sources above)
+    rows += [_pool_row("wildguardmix", f"mixed prompt {i}", source_label=float(i % 3 == 0),
+                        source_category=f"tag_{i % 4}") for i in range(300)]
+    rows += [_pool_row("toxic_chat", f"ood prompt {i}", source_label=float(i % 2)) for i in range(20)]
+    rows += [_pool_row("hn_seed", f"hard negative {i}", source_label=0.0,
+                        tags=f"hard_negative;hn:cat{i % 10}") for i in range(60)]
+    df = pd.DataFrame(rows)
+    df["dup_group"] = df["id"]
+
+    cfg = {"ood_source": "toxic_chat", "val_pool_size": 200, "test_pool_size": 200,
+           "test_ood_pool_size": 20, "hn_pool_ratio": 0.8}
+    out = split.add_split(df, cfg, seed=42)
+
+    val, test = out[out["split"] == "val_pool"], out[out["split"] == "test_pool"]
+    assert len(val) > 0 and len(test) > 0
+    # pool sizes land close to their configured targets, not inflated by a long tail of
+    # tiny strata each pool used to be guaranteed at least one group from
+    assert abs(len(val) - cfg["val_pool_size"]) <= cfg["val_pool_size"] * 0.25
+    assert abs(len(test) - cfg["test_pool_size"]) <= cfg["test_pool_size"] * 0.25
+
+    val_mean, test_mean = val["source_label"].mean(), test["source_label"].mean()
+    assert abs(val_mean - test_mean) <= 0.05, (
+        f"val_pool mean source_label {val_mean:.3f} vs test_pool {test_mean:.3f} "
+        "differ by more than a couple of points"
+    )
+
+    val_share = val["source"].value_counts(normalize=True)
+    test_share = test["source"].value_counts(normalize=True)
+    all_sources = set(val_share.index) | set(test_share.index)
+    for src in all_sources:
+        diff = abs(val_share.get(src, 0.0) - test_share.get(src, 0.0))
+        assert diff <= 0.06, f"source {src!r} share differs by {diff:.3f} between val/test pools"
+
+
+def test_split_accepts_ood_sources_list_and_keeps_backward_compat_with_ood_source():
+    rows = [_pool_row("toxic_chat", f"ood prompt {i}", source_label=float(i % 2)) for i in range(10)]
+    rows += [_pool_row("xstest", f"other ood prompt {i}", source_label=0.0) for i in range(10)]
+    rows += [_pool_row("wildguardmix", f"general prompt {i}", source_label=float(i % 2)) for i in range(20)]
+    df = pd.DataFrame(rows)
+    df["dup_group"] = df["id"]
+
+    cfg_list = {"ood_sources": ["toxic_chat", "xstest"], "val_pool_size": 3, "test_pool_size": 3,
+                "test_ood_pool_size": 30, "hn_pool_ratio": 0.5}
+    out = split.add_split(df, cfg_list, seed=1)
+    ood_rows = out[out["source"].isin(["toxic_chat", "xstest"])]
+    assert len(ood_rows) > 0
+    assert (ood_rows["split"] == "test_ood_pool").all()
+    assert not (out[out["split"] != "test_ood_pool"]["source"].isin(["toxic_chat", "xstest"])).any()
+
+    # backward compat: the older singular `ood_source` string still works and isn't
+    # shadowed by the (list-typed) default
+    cfg_single = {"ood_source": "xstest", "val_pool_size": 3, "test_pool_size": 3,
+                  "test_ood_pool_size": 30, "hn_pool_ratio": 0.5}
+    out2 = split.add_split(df, cfg_single, seed=1)
+    assert (out2[out2["source"] == "xstest"]["split"] == "test_ood_pool").all()
+    assert not (out2[out2["split"] == "test_ood_pool"]["source"] == "toxic_chat").any()
+
+
 def test_split_routes_hn_seed_mostly_to_val_test():
     rows = [_pool_row("hn_seed", f"hard negative {i}", source_label=0.0,
                        tags="hard_negative;hn:detection") for i in range(10)]
@@ -615,3 +738,127 @@ def test_build_stats_only_writes_no_files(tmp_path):
     assert summary["pool"] > 0
     assert not interim.exists()
     assert not processed.exists()
+
+
+# ------------------------------------------------------------------- inspect ------
+
+def _cyber_row(source, text, label, kw_hits, tags="") -> dict:
+    row = {c: None for c in schema.POOL_COLUMNS}
+    row.update({
+        "id": schema.make_id(source, text), "text": text, "source": source,
+        "source_label": label, "source_category": None, "is_adversarial": None,
+        "tags": tags, "origin_split": None,
+    })
+    row["in_scope"] = True
+    row["kw_hits"] = kw_hits
+    row["dup_group"] = row["id"]
+    return row
+
+
+def _make_inspect_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    interim, processed = tmp_path / "interim", tmp_path / "processed"
+    interim.mkdir()
+    processed.mkdir()
+
+    cyber_rows = [
+        _cyber_row("or_bench", "explain sql injection attack in depth", 1.0, "sql injection"),
+        _cyber_row("or_bench", "explain sql injection basics", 1.0, "sql injection;incident response"),
+        _cyber_row("wildguardmix", "how do I detect ransomware on my network", 0.0, "ransomware"),
+        _cyber_row("hn_seed", "hard negative text about nmap port scanning", 0.0, "nmap",
+                    tags="hard_negative;hn:detection"),
+    ]
+    pd.DataFrame(cyber_rows).to_parquet(interim / "cyber_pool.parquet", index=False)
+
+    split_of = {0: "train", 1: "val_pool", 2: "test_pool", 3: "val_pool"}
+    split_rows = []
+    for i, row in enumerate(cyber_rows):
+        row = dict(row)
+        row["split"] = split_of[i]
+        split_rows.append(row)
+    split_df = pd.DataFrame(split_rows)
+    for name in schema.SPLIT_NAMES:
+        part = split_df[split_df["split"] == name].reset_index(drop=True)
+        part.to_parquet(processed / f"{name}.parquet", index=False)
+    return interim, processed
+
+
+def test_split_source_summary_counts_and_means(tmp_path):
+    interim, processed = _make_inspect_fixture(tmp_path)
+    df = inspect.load_processed(processed)
+    table = inspect.split_source_summary(df)
+    row = table[(table["split"] == "val_pool") & (table["source"] == "or_bench")].iloc[0]
+    assert row["rows"] == 1
+    assert row["mean_source_label"] == 1.0
+    row = table[(table["split"] == "val_pool") & (table["source"] == "hn_seed")].iloc[0]
+    assert row["mean_source_label"] == 0.0
+    # test_ood_pool has no rows in this fixture but should still not error
+    assert (df.groupby("split")["id"].size().reindex(schema.SPLIT_NAMES, fill_value=0) >= 0).all()
+
+
+def test_keyword_frequency_table_excludes_hn_seed_and_reports_sole_hit_share(tmp_path):
+    interim, _ = _make_inspect_fixture(tmp_path)
+    cyber = inspect.load_cyber_pool(interim)
+    table = inspect.keyword_frequency_table(cyber, top_n=40)
+    keywords = set(table["keyword"])
+    assert "nmap" not in keywords  # hn_seed only; excluded as not a "public" source
+
+    sqli = table[table["keyword"] == "sql injection"].iloc[0]
+    assert sqli["rows"] == 2
+    assert sqli["sole_hit_share"] == 0.5  # only-hit in one of its two matching rows
+
+    ransomware = table[table["keyword"] == "ransomware"].iloc[0]
+    assert ransomware["rows"] == 1
+    assert ransomware["sole_hit_share"] == 1.0
+
+    ir = table[table["keyword"] == "incident response"].iloc[0]
+    assert ir["sole_hit_share"] == 0.0  # always co-occurs with "sql injection" here
+
+
+def test_show_samples_truncates_and_filters_by_source_and_keyword(tmp_path, capsys):
+    interim, _ = _make_inspect_fixture(tmp_path)
+    cyber = inspect.load_cyber_pool(interim)
+    inspect.show_samples(cyber, "or_bench", "sql injection", n=1)
+    out = capsys.readouterr().out
+    assert "or_bench" in out
+    assert "sql injection attack" in out or "sql injection basics" in out
+    assert "ransomware" not in out  # wrong source/keyword, must not leak in
+
+
+def test_inspect_cli_default_run_prints_no_row_text(tmp_path):
+    interim, processed = _make_inspect_fixture(tmp_path)
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "reflex_sentry.data.inspect",
+         "--processed", str(processed), "--interim", str(interim), "--top-n", "10"],
+        cwd=repo_root, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "sql injection" in result.stdout  # keyword itself is fine to print
+    assert "explain sql injection attack in depth" not in result.stdout  # but not raw row text
+    assert "val_pool" in result.stdout and "test_pool" in result.stdout
+
+
+def test_inspect_cli_show_prints_truncated_samples(tmp_path):
+    interim, processed = _make_inspect_fixture(tmp_path)
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "reflex_sentry.data.inspect",
+         "--processed", str(processed), "--interim", str(interim),
+         "--show", "5", "--source", "or_bench", "--keyword", "sql injection"],
+        cwd=repo_root, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "explain sql injection attack in depth" in result.stdout
+    assert "explain sql injection basics" in result.stdout
+
+
+def test_inspect_cli_show_requires_source_and_keyword(tmp_path):
+    interim, processed = _make_inspect_fixture(tmp_path)
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-m", "reflex_sentry.data.inspect",
+         "--processed", str(processed), "--interim", str(interim), "--show", "5"],
+        cwd=repo_root, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode != 0
+    assert "--source" in result.stderr and "--keyword" in result.stderr

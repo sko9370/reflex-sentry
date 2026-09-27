@@ -40,7 +40,13 @@ dedupe_threshold: 0.8
 # Split sizes and policy (reflex_sentry/data/split.py). Pool sizes are candidate counts for
 # hand labeling, not final gold set sizes; expect to drop some as unusable during labeling.
 split:
-  ood_source: toxic_chat        # entire source held out for test_ood_pool, never trained on
+  # Entire source(s) held out for test_ood_pool, never trained/validated/tested on otherwise.
+  # A list, so more than one source can be held out; the older singular `ood_source: <name>`
+  # (a plain string) is still accepted for backward compat if a config still uses it. Left at
+  # just toxic_chat for now -- revisit once `python -m reflex_sentry.data.inspect` shows the
+  # per-source counts, in case a second source (e.g. xstest) is worth holding out too.
+  ood_sources:
+    - toxic_chat
   val_pool_size: 600
   test_pool_size: 600
   test_ood_pool_size: 600
