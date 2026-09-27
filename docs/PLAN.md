@@ -37,6 +37,10 @@ Defaults in `reflex_sentry.gold.sample`. Candidate pools shrunk to 400 each so f
 
 The first real build showed everyday words (vulnerable, breach, exploit, malicious, injection) pulling in non-cyber prompts, mostly from OR-Bench, while casual attack phrasing ("hack into my ex's instagram") was missed. Keyword lines can now be `weak:`; a prompt is in scope with one strong hit or two distinct weak hits. Casual hacking and account-takeover phrasings were added as strong regexes.
 
+### 2026-09-27: gold labels drafted by Opus, reviewed by the owner
+
+The 800 sampled items (300 val, 300 test, 200 test_ood) were labeled in two independent Opus passes over differently ordered batches, merged with `python -m reflex_sentry.gold.draft_merge`, and all 30 pass disagreements were adjudicated. Five of sixteen labeling batches stopped partway when a safety classifier interrupted the labeler; those stops were not retried or worked around. Result: 717 of 800 items have at least one model label; 56 test items (36 or_bench, 20 wildguardmix) are unlabeled and need a human label, and 27 unlabeled hn_seed items were prefilled as benign. Pass A vs B agreement on doubly labeled items: val 0.93 (kappa 0.82), test 0.94 (kappa 0.81, n=55), test_ood 0.91 (kappa 0.73). The owner reviews every priority-1 row before ingest. The writeup must state that gold labels are model drafts with human review, not independent human labels, which weakens the "hand labels are the only independent check on teacher bias" argument.
+
 ### 2026-09-27: data/ stays out of git
 
 Raw and processed data, gold labels, teacher scores, and model artifacts are never committed. `data/SOURCES.md` is the one exception (license and provenance notes per dataset), and `.gitignore` is written as `data/*` plus `!data/SOURCES.md` so that file can be tracked while everything else under `data/` stays ignored.

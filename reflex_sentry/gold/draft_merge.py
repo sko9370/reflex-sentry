@@ -179,12 +179,14 @@ def compute_row(r: pd.Series) -> dict:
     p1: list[str] = []
     if split_disagree:
         p1.append(f"adjudicated split {gold_a}/{gold_b}" if adjudicated else f"labelers split {gold_a}/{gold_b}")
+    elif adjudicated and gold != (gold_a if has_a else gold_b):
+        p1.append(f"consistency override {gold_a if has_a else gold_b}->{gold}")
     if has_a and not has_b:
         p1.append("single labeler only (pass B missing)")
     elif has_b and not has_a:
         p1.append("single labeler only (pass A missing)")
     elif not has_a and not has_b:
-        p1.append("unlabeled, needs human label")
+        p1.append("prefilled, not model-labeled" if adjudicated else "unlabeled, needs human label")
 
     has_src = _has_source(r["_source_label"])
     src_unsafe = has_src and float(r["_source_label"]) == 1.0
