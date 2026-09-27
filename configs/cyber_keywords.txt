@@ -1,0 +1,351 @@
+# Cyber-scope prefilter keyword list for reflex-sentry (reflex_sentry/data/prefilter.py)
+#
+# One term or phrase per line. '#' starts a comment (inline or full-line); blank lines
+# ignored. Matching is case-insensitive and word-boundary aware (see prefilter.py), so
+# multiword phrases match as a unit and short words don't match inside longer ones.
+#
+# This is a RECALL-oriented filter: it is meant to catch both offensive and defensive
+# cyber vocabulary, so downstream labeling has dangerous, hard-negative, and ambiguous
+# candidates to work with. Deliberately avoids very generic single words that would match
+# almost any prompt (e.g. bare "key", "attack", "hack", "secure", "access", "target",
+# "network"); those only appear here as part of a more specific phrase. Tune this list as
+# you label: add terms the prefilter is missing, remove ones that only add noise.
+
+# --- malware ---------------------------------------------------------------
+malware
+ransomware
+spyware
+trojan horse
+rat payload
+remote access trojan
+keylogger
+keystroke logger
+rootkit
+bootkit
+worm virus
+computer virus
+dropper
+stealer malware
+info stealer
+infostealer
+backdoor
+webshell
+web shell
+c2 server
+c2 infrastructure
+command and control server
+botnet
+polymorphic malware
+fileless malware
+macro malware
+malicious macro
+malicious payload
+crypter
+packer obfuscation
+payload obfuscation
+loader malware
+wiper malware
+cryptojacking
+banking trojan
+mobile malware
+apk malware
+
+# --- exploitation ------------------------------------------------------------
+exploit code
+proof of concept exploit
+poc exploit
+zero-day
+0day
+n-day exploit
+buffer overflow exploit
+stack overflow exploit
+heap overflow
+use after free
+format string vulnerability
+sql injection
+sqli
+command injection
+remote code execution
+rce exploit
+arbitrary code execution
+privilege escalation
+priv esc
+local privilege escalation
+sandbox escape
+container escape
+jailbreak device
+shellcode
+reverse shell
+bind shell
+metasploit
+metasploit module
+msfconsole
+meterpreter
+exploit-db
+exploit development
+fuzzing harness
+memory corruption
+return oriented programming
+rop chain
+deserialization vulnerability
+path traversal
+directory traversal
+xxe injection
+ssrf vulnerability
+server side request forgery
+csrf exploit
+xss payload
+cross site scripting
+race condition exploit
+kernel exploit
+driver exploit
+supply chain attack
+dependency confusion attack
+
+# --- credentials -------------------------------------------------------------
+credential theft
+credential stuffing
+credential harvesting
+password cracking
+password brute force
+brute force login
+hash cracking
+rainbow table
+john the ripper
+hashcat
+mimikatz
+pass the hash
+pass the ticket
+kerberoasting
+golden ticket attack
+silver ticket attack
+session hijacking
+session token theft
+cookie theft
+token replay attack
+account takeover
+credential dumping
+lsass dump
+sam database dump
+dictionary attack password
+password spraying
+2fa bypass
+mfa bypass
+otp bypass
+
+# --- phishing / social engineering --------------------------------------------
+phishing kit
+phishing email template
+spear phishing
+whaling attack
+smishing
+vishing
+credential harvesting page
+fake login page
+clone website login
+pretexting script
+business email compromise
+impersonate a company
+impersonate a bank
+social engineering attack
+baiting attack
+quid pro quo attack
+tailgating physical security
+pretext caller script
+urgency phishing
+typosquatting domain
+lookalike domain
+homograph attack domain
+
+# --- network attack / ddos -----------------------------------------------------
+denial of service
+ddos attack
+ddos botnet
+syn flood
+udp flood
+http flood attack
+amplification attack
+reflection attack
+booter service
+stresser service
+mirai botnet
+arp spoofing
+arp poisoning
+dns spoofing
+dns cache poisoning
+man in the middle attack
+mitm attack
+packet sniffing attack
+network sniffer
+wifi deauth attack
+deauthentication attack
+rogue access point
+evil twin access point
+wardriving
+port scanning
+nmap scan
+masscan
+network reconnaissance
+vulnerability scanner
+vulnerability scanning
+subdomain enumeration
+banner grabbing
+
+# --- intrusion / lateral movement ------------------------------------------------
+lateral movement
+pivoting network
+persistence mechanism
+maintain persistence
+data exfiltration
+exfiltrate data
+covert channel
+c2 beacon
+beaconing traffic
+domain fronting
+living off the land
+lolbin
+unauthorized access
+gain unauthorized access
+breach a network
+compromise a server
+compromise an account
+insider threat attack
+supply chain compromise
+watering hole attack
+advanced persistent threat
+apt group
+nation state hacking
+
+# --- evasion / anti-detection ----------------------------------------------------
+antivirus evasion
+av evasion
+edr evasion
+edr bypass
+bypass antivirus
+bypass edr
+disable logging
+clear event logs
+log tampering
+anti-forensics
+anti-debugging
+anti-sandbox technique
+obfuscated code
+code obfuscation
+string encryption malware
+process hollowing
+process injection
+dll injection
+dll sideloading
+reflective dll injection
+living-off-the-land binary
+timestomping
+steganography payload
+covert exfiltration channel
+
+# --- defensive / detection / IR (kept for hard negatives and dual-use terms) ---------
+detection rule
+sigma rule
+yara rule
+snort rule
+suricata rule
+ids signature
+ips signature
+edr telemetry
+siem alert
+threat hunting
+threat intelligence
+threat actor profile
+mitre att&ck
+att&ck technique
+indicators of compromise
+ioc list
+malware analysis
+reverse engineering a sample
+static analysis of a binary
+dynamic malware analysis
+sandbox report
+incident response plan
+incident response playbook
+digital forensics
+forensic image
+memory forensics
+disk forensics
+log analysis
+security operations center
+soc analyst
+vulnerability management
+patch management
+secure code review
+secure coding practices
+threat model
+penetration test report
+authorized penetration test
+red team engagement
+blue team exercise
+purple team exercise
+capture the flag
+ctf challenge
+security awareness training
+bug bounty report
+responsible disclosure
+cve advisory
+common vulnerabilities and exposures
+patch a vulnerability
+harden a server
+security hardening
+firewall rule
+intrusion detection system
+intrusion prevention system
+zero trust architecture
+data loss prevention
+endpoint detection and response
+
+# --- tools -----------------------------------------------------------------------
+nmap
+metasploit
+mimikatz
+cobalt strike
+burp suite
+wireshark
+nessus
+openvas
+nikto
+sqlmap
+hydra brute force
+aircrack-ng
+john the ripper
+hashcat
+empire c2
+covenant c2
+bloodhound ad
+responder tool
+impacket
+netcat reverse shell
+ncat
+gobuster
+dirbuster
+shodan search
+censys search
+maltego
+
+# --- protocols / infrastructure terms often paired with attacks -------------------
+smb exploit
+rdp exploit
+rdp brute force
+ssh brute force
+ftp exploit
+telnet exploit
+active directory attack
+ldap injection
+dns tunneling
+icmp tunneling
+vpn exploit
+iot botnet
+scada attack
+ics attack
+plc attack
+cloud misconfiguration
+s3 bucket exposure
+api key leak
+secrets leak
+exposed credentials repository

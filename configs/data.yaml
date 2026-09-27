@@ -1,0 +1,39 @@
+# Configuration for `python -m reflex_sentry.data.build`.
+# See docs/DATA_CONTRACT.md for what each pipeline stage produces.
+
+seed: 42
+
+raw_dir: data/raw
+interim_dir: data/interim
+processed_dir: data/processed
+hn_seed_path: seeds/hard_negatives.csv
+keywords_path: configs/cyber_keywords.txt
+
+# Exact-dedupe tie-break: when the same normalized text appears in more than one
+# source, keep the row from the source listed earliest here. Hand-written hard
+# negatives win first (highest value, least redundant elsewhere); OR-Bench and
+# XSTest lose last since they are the most likely to overlap generic phrasing.
+dedupe_preference:
+  - hn_seed
+  - aegis2
+  - wildguardmix
+  - beavertails
+  - hh_redteam
+  - toxic_chat
+  - xstest
+  - or_bench
+
+# Near-duplicate grouping (MinHash/LSH over word shingles, see reflex_sentry/data/dedupe.py).
+shingle_k: 5
+minhash_perm: 32
+minhash_bands: 8
+dedupe_threshold: 0.8
+
+# Split sizes and policy (reflex_sentry/data/split.py). Pool sizes are candidate counts for
+# hand labeling, not final gold set sizes; expect to drop some as unusable during labeling.
+split:
+  ood_source: toxic_chat        # entire source held out for test_ood_pool, never trained on
+  val_pool_size: 600
+  test_pool_size: 600
+  test_ood_pool_size: 600
+  hn_pool_ratio: 0.8            # share of hn_seed rows routed to val_pool/test_pool vs train
