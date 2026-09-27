@@ -1,0 +1,124 @@
+# Keyword-rule baseline for reflex-sentry (milestone 2).
+#
+# This is a transparent, zero-learned-parameter baseline: every rule below is
+# a vocabulary or phrasing cue only (naming a technique, a stance toward
+# security controls, or an authorization gap). No rule matches operational
+# content -- no code, no commands, no payload detail -- by design, so the
+# fixture and config that exercise it stay safe to read and to commit.
+#
+# Weight scale: roughly 0.5 (weak/ambiguous cue) to 2.5 (hard to read any
+# other way). Weights are hand-picked, not fit to data -- that is the point
+# of a baseline every later model has to beat.
+#
+# Scoring (see reflex_sentry/baselines/keyword_rules.py for the full
+# function): matched `offensive` and `target` weights sum into an offensive
+# score; matched `defensive` weights sum into a defensive score; the net of
+# the two drives p_safe vs p_dangerous, while the *total* matched weight
+# (regardless of sign) raises p_unsure, so a prompt that trips both an
+# offensive cue and a defensive cue reads as unsure rather than confidently
+# either way.
+
+# -- offensive-intent signals: covert, harmful, or attack-enabling framing --
+offensive:
+  - pattern: '\bundetectable\b'
+    weight: 1.8
+    note: explicit anti-detection framing
+  - pattern: '\bbypass(es|ing)?\s+(the\s+)?(antivirus|edr|av)\b'
+    weight: 2.2
+    note: defeating endpoint defenses for offense
+  - pattern: '\b(hide|hides|hiding)\s+from\s+(antivirus|edr|av|detection)\b'
+    weight: 2.0
+    note: evading detection controls
+  - pattern: "\\bwithout\\s+(them|her|him|anyone|him or her)\\s+knowing\\b"
+    weight: 1.8
+    note: covert-against-a-person framing
+  - pattern: '\bsteal(ing)?\s+(the\s+)?(credentials|passwords|cookies|session tokens?|logins?)\b'
+    weight: 2.3
+    note: credential or session theft intent
+  - pattern: '\bspread(s|ing)?\s+to\s+other\s+(machines|computers|devices)\b'
+    weight: 2.0
+    note: self-propagation / worming intent
+  - pattern: '\bransomware\b.*\bencrypt'
+    weight: 2.4
+    note: ransomware payload intent
+  - pattern: '\bencrypt\w*\b.*\bransomware\b'
+    weight: 2.4
+    note: ransomware payload intent (reversed word order)
+  - pattern: '\bbotnet\b'
+    weight: 1.9
+    note: coordinated compromised-host network
+  - pattern: '\bphishing\s+(page|site|email)\s+for\b'
+    weight: 2.1
+    note: impersonation phishing artifact for a named brand
+  - pattern: '\bkeylogger\b(?:(?!\.).)*\bhide(s|d)?\b'
+    weight: 2.2
+    note: covert keystroke capture
+  - pattern: '\bhid(e|es|den)\b(?:(?!\.).)*\bkeylogger\b'
+    weight: 2.2
+    note: covert keystroke capture (reversed word order)
+  - pattern: '\bspy\s+on\b'
+    weight: 1.4
+    note: covert surveillance of a person
+  - pattern: '\bdenial[- ]of[- ]service\s+attack\b'
+    weight: 1.6
+    note: DoS / DDoS attack framing
+  - pattern: '\bcrack(ing)?\s+(the\s+)?password'
+    weight: 1.7
+    note: credential cracking
+
+# -- defensive / educational signals: analysis, mitigation, authorized study --
+defensive:
+  - pattern: '\bdetection\s+rule\b'
+    weight: 1.7
+    note: writing detections, not attacks
+  - pattern: '\byara\b'
+    weight: 1.6
+    note: named detection-signature format
+  - pattern: '\bsigma\s+rule\b'
+    weight: 1.6
+    note: named detection-signature format
+  - pattern: '\bmitigat(e|es|ion)\b'
+    weight: 1.4
+    note: defensive remediation framing
+  - pattern: '\bpatch(es|ing)?\s+(it|this|the)\b'
+    weight: 1.2
+    note: fixing a known vulnerability
+  - pattern: '\bhow\s+does\b.*\bwork\b'
+    weight: 1.0
+    note: conceptual "how it works" framing
+  - pattern: '\bexplain\b'
+    weight: 0.8
+    note: conceptual / educational framing
+  - pattern: '\bmy\s+own\s+(lab|homelab|test\s+environment|sandbox|network)\b'
+    weight: 1.8
+    note: self-owned, authorized environment
+  - pattern: '\bctf\b'
+    weight: 1.6
+    note: capture-the-flag / authorized training
+  - pattern: '\bincident\s+response\b'
+    weight: 1.7
+    note: defensive investigative work
+  - pattern: '\bforensics?\b'
+    weight: 1.5
+    note: defensive investigative work
+  - pattern: '\b(our|my)\s+(own\s+)?(soc|security)\s+team\b'
+    weight: 1.3
+    note: acting on behalf of an owning defensive team
+
+# -- target / authorization signals: naming a target the requester likely --
+# -- does not control. Vocabulary cues only; weight folds into the         --
+# -- offensive score in keyword_rules.py, since an authorization gap       --
+# -- compounds offensive intent rather than standing on its own.          --
+target:
+  - pattern: "\\bsomeone\\s+else'?s\\b"
+    weight: 1.3
+    note: explicit third-party ownership
+  - pattern: "\\bmy\\s+ex'?s\\b"
+    weight: 1.6
+    note: named unauthorized personal target
+  - pattern: "\\ba\\s+company\\s+i\\s+don'?t\\s+work\\s+for'?s?\\b"
+    weight: 1.6
+    note: explicit lack of employment authorization
+  - pattern: "\\bschool'?s\\s+network\\b"
+    weight: 1.4
+    note: institutional network not owned by the requester
