@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reflex-sentry"
+version = "0.1.0"
+description = "A fast, calibrated tier-one gate for cyber-misuse prompts"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+    "tabulate>=0.9",
+    "pyarrow>=15.0",
+    "pytest>=8.0",
+]
+
+[project.optional-dependencies]
+stage_a = [
+    "sentence-transformers>=3.0",
+]
+stage_b = [
+    "torch",
+    "transformers>=4.48",
+    "datasets",
+    "optimum[onnxruntime]",
+    "onnxruntime",
+]
+
+[tool.setuptools.packages.find]
+include = ["reflex_sentry*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

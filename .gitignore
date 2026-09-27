@@ -1,4 +1,5 @@
-data/
+data/*
+!data/SOURCES.md
 models/
 reports/*/
 !reports/example_synthetic/
@@ -7,3 +8,5 @@ preds/
 __pycache__/
 .ipynb_checkpoints/
 .venv/
+*.egg-info/
+.pytest_cache/

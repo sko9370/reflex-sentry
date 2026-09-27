@@ -1,12 +1,54 @@
-# s1gate: a fast tier-one gate for cyber-misuse prompts
+# reflex-sentry: a fast tier-one gate for cyber-misuse prompts
 
-A proof of concept for a small, calibrated "System 1" classifier that reads a single user prompt and decides, in milliseconds on a CPU, whether it can pass or must be escalated to a slower tier (a guard LLM or a human reviewer).
+A proof of concept for a small, calibrated, fast (System 1 style) classifier that reads a single user prompt and decides, in milliseconds on a CPU, whether it can pass or must be escalated to a slower tier (a guard LLM or a human reviewer).
 
 The model is not the novel part. Small guard classifiers already exist (Prompt Guard, Llama Guard, ShieldGemma, WildGuard, Granite Guardian, Qwen3Guard). The contribution of this project is the evaluation:
 
 1. **Narrow cyber scope with dual-use hard negatives.** How often does the gate escalate legitimate defensive work?
 2. **Cascade economics.** At a fixed recall on dangerous prompts, what share of benign traffic reaches tier two, and what does that cost per million prompts?
 3. **Honest calibration and robustness.** Are the probabilities trustworthy, and where do evasion wrappers and unseen data sources break the model?
+
+---
+
+## Quickstart
+
+```bash
+# Install (either works)
+pip install -e .
+# or: pip install -r requirements.txt
+
+# Run the test suite
+pytest
+
+# Run the end-to-end harness smoke test (keyword baseline through the report CLI)
+bash scripts/smoke_e2e.sh
+```
+
+Then, to build real data:
+
+```bash
+# Download raw datasets (some are gated on Hugging Face; accept the license on the dataset page first)
+hf download lmsys/toxic-chat --repo-type dataset --local-dir data/raw/toxic_chat
+hf download allenai/wildguardmix --repo-type dataset --local-dir data/raw/wildguardmix          # gated
+hf download PKU-Alignment/BeaverTails --repo-type dataset --local-dir data/raw/beavertails
+hf download nvidia/Aegis-AI-Content-Safety-Dataset-2.0 --repo-type dataset --local-dir data/raw/aegis2  # may be gated
+hf download Anthropic/hh-rlhf --repo-type dataset --include "red-team-attempts/*" --local-dir data/raw/hh_redteam
+hf download walledai/XSTest --repo-type dataset --local-dir data/raw/xstest
+hf download bench-llm/or-bench --repo-type dataset --local-dir data/raw/or_bench
+
+# Scope filter, dedupe, split
+python -m reflex_sentry.data.build --config configs/data.yaml
+
+# Gold labeling (see configs/labeling_guide.md for the judgment calls)
+python -m reflex_sentry.gold.sample     # draw a sample to label
+python -m reflex_sentry.gold.export     # export to a spreadsheet or Label Studio
+python -m reflex_sentry.gold.ingest     # ingest completed labels
+python -m reflex_sentry.gold.agreement  # inter-rater agreement, if labeling with someone else
+
+# Keyword-rule baseline, then score it with the harness
+python -m reflex_sentry.baselines.keyword_rules --in data/processed/test.parquet --out preds/keyword_test.csv
+python -m reflex_sentry.eval.report --preds preds/keyword_test.csv --config configs/eval.yaml --out reports/keyword_test
+```
 
 ---
 
@@ -79,11 +121,11 @@ Your integrated GPU shares system RAM and its memory bandwidth with the CPU, so 
 | 4 | Build soft targets (teacher + dataset label + disagreement) | **Local** | Pandas |
 | 5 | Stage A: frozen sentence embeddings + logistic regression | **Local** | A small embedding model on CPU embeds 20k prompts in minutes to an hour. Training takes seconds. |
 | 6 | Stage B: fine-tune encoder student on soft targets | **Kaggle** | ModernBERT-base or DeBERTa-v3-small: minutes per epoch on a T4, hours per epoch on CPU |
-| 7 | Temperature scaling on the validation set | **Local** | `s1gate_eval.calibrate` |
+| 7 | Temperature scaling on the validation set | **Local** | `reflex_sentry.eval.calibrate` |
 | 8 | Export to ONNX, int8 quantize | **Local** | The model you would actually deploy is the CPU one |
-| 9 | Generate evasion-wrapped variants of the test set | **Local** | `s1gate_eval.wrappers`, templated, no LLM needed |
+| 9 | Generate evasion-wrapped variants of the test set | **Local** | `reflex_sentry.eval.wrappers`, templated, no LLM needed |
 | 10 | Run inference on all test sets, write prediction CSVs | **Local** | Measures real CPU latency |
-| 11 | Evaluate and write reports | **Local** | `python -m s1gate_eval.report` |
+| 11 | Evaluate and write reports | **Local** | `python -m reflex_sentry.eval.report` |
 
 **Moving data between them:** upload `data/processed/*.parquet` as a private Kaggle Dataset, attach it to the notebook, and download outputs (teacher scores, model weights) from the notebook's output tab back into `data/interim/` and `models/`.
 
@@ -97,12 +139,13 @@ Candidate public datasets containing real or red-team prompts with safety labels
 
 | Dataset | Useful for |
 |---|---|
-| ToxicChat (LMSYS) | Real user prompts, jailbreak flags |
-| WildGuardMix (AllenAI) | Harmful and benign prompts, adversarial variants |
-| BeaverTails | Harm-category labels |
-| Aegis (NVIDIA) | Harm taxonomy labels |
-| Anthropic HH-RLHF red-team attempts | Adversarial human-written prompts |
-| XSTest, OR-Bench | Benign prompts that look harmful (over-refusal probes) |
+| ToxicChat (LMSYS), `lmsys/toxic-chat` | Real user prompts, jailbreak flags |
+| WildGuardMix (AllenAI), `allenai/wildguardmix` (gated) | Harmful and benign prompts, adversarial variants |
+| BeaverTails, `PKU-Alignment/BeaverTails` | Harm-category labels |
+| Aegis (NVIDIA), `nvidia/Aegis-AI-Content-Safety-Dataset-2.0` (may be gated) | Harm taxonomy labels |
+| Anthropic HH-RLHF red-team attempts, `Anthropic/hh-rlhf` (`red-team-attempts/*`) | Adversarial human-written prompts |
+| XSTest, `walledai/XSTest` | Benign prompts that look harmful (over-refusal probes) |
+| OR-Bench, `bench-llm/or-bench` | Benign prompts that look harmful (over-refusal probes) |
 | Your own writing | Hard negatives in the `hn:*` categories; public datasets are thin here |
 
 **Scope filter:** keyword prefilter (cyber vocabulary list in `configs/cyber_keywords.txt`) followed by a zero-shot pass or manual review. Expect the benign cyber pool to be small; writing 200 to 500 hard negatives yourself is likely the highest-value hour in the project.
@@ -143,13 +186,13 @@ target   = [ (1 - p) * (1 - u),  p * (1 - u),  u ]   # [safe, dangerous, unsure]
 
 ### 4.5 Calibration and export
 
-Fit a single temperature `T` on `val` logits (`s1gate_eval.calibrate.fit_temperature`). Export to ONNX, quantize to int8, and confirm the quantized model's metrics on `val` match the fp32 model within noise before running any test set.
+Fit a single temperature `T` on `val` logits (`reflex_sentry.eval.calibrate.fit_temperature`). Export to ONNX, quantize to int8, and confirm the quantized model's metrics on `val` match the fp32 model within noise before running any test set.
 
 ---
 
 ## 5. Evaluation framework
 
-Everything in this section is implemented in `s1gate_eval/` and runs on a CSV of predictions. The harness is model-agnostic: any model, teacher, or baseline that writes this file can be scored the same way, which is how you compare your student against an off-the-shelf guard model.
+Everything in this section is implemented in `reflex_sentry/eval/` and runs on a CSV of predictions. The harness is model-agnostic: any model, teacher, or baseline that writes this file can be scored the same way, which is how you compare your student against an off-the-shelf guard model.
 
 ### 5.1 Prediction file schema
 
@@ -201,20 +244,20 @@ Every rate is reported with a 95% Wilson confidence interval. With a few hundred
 
 ```bash
 # Score test predictions, choosing the threshold on validation predictions
-python -m s1gate_eval.report \
+python -m reflex_sentry.eval.report \
     --preds preds/stageB_test.csv \
     --val   preds/stageB_val.csv \
     --config configs/eval.yaml \
     --out   reports/stageB_test
 
 # Fit temperature on validation logits, apply to test logits
-python -m s1gate_eval.calibrate \
+python -m reflex_sentry.eval.calibrate \
     --val-logits preds/stageB_val_logits.csv \
     --apply preds/stageB_test_logits.csv \
     --out preds/stageB_test.csv
 
 # Make evasion-wrapped copies of the test set for robustness scoring
-python -m s1gate_eval.wrappers --in data/processed/test.parquet --out data/processed/test_evasion.parquet
+python -m reflex_sentry.eval.wrappers --in data/processed/test.parquet --out data/processed/test_evasion.parquet
 ```
 
 Outputs in `--out`: `report.md`, `metrics.json`, `threshold_sweep.csv`, `pr_curve.png`, `reliability.png`.
@@ -258,22 +301,38 @@ The raw datasets contain harmful prompts. Keep `data/` out of version control (s
 ## Repo layout
 
 ```
-s1gate/
+reflex-sentry/
   README.md
   requirements.txt
+  pyproject.toml
+  .gitignore
   configs/
     eval.yaml              traffic assumptions, recall target, cost
-    cyber_keywords.txt     scope prefilter (to write)
-    labeling_guide.md      (to write)
-  s1gate_eval/
-    metrics.py             all metric functions
-    report.py              CLI: scores a prediction CSV, writes report
-    calibrate.py           temperature scaling
-    wrappers.py            evasion-wrapper generator
+    data.yaml               data sources, scope filter, split rules
+    cyber_keywords.txt     scope prefilter
+    keyword_rules.yaml     keyword-rule baseline config
+    labeling_guide.md      hand-labeling judgment calls
+    label_studio.xml       Label Studio labeling interface
+  seeds/
+    hard_negatives.csv     drafted hard negatives, human review pending
+  scripts/
+    smoke_e2e.sh           end-to-end harness smoke test
+  reflex_sentry/
+    eval/
+      metrics.py             all metric functions
+      report.py               CLI: scores a prediction CSV, writes report
+      calibrate.py            temperature scaling
+      wrappers.py             evasion-wrapper generator
+    data/                    download, scope filter, dedupe, split
+    gold/                    gold-set sampling, export, ingest, agreement
+    baselines/               keyword-rule baseline
+  docs/
+    DATA_CONTRACT.md        schema and provenance contract for processed data
+    PLAN.md                 development plan and decision log
   tests/
     make_synthetic.py      synthetic predictions for harness testing
     test_metrics.py
   notebooks/               Kaggle notebooks (teacher labeling, Stage B)
-  data/                    git-ignored
+  data/                    git-ignored except data/SOURCES.md
   reports/
 ```
