@@ -209,6 +209,75 @@ Or, end to end: `bash scripts/run_stage_a.sh`.
   touch the network, and never open anything under `data/`; they build tiny synthetic pools
   and gold files instead.
 
+### Milestone 5: Stage B fine-tuned encoder student, export, CPU inference
+
+Fine-tuned encoder (README 4.4/4.5): `answerdotai/ModernBERT-base` (alt `microsoft/deberta-v3-small`),
+mean pooling over the attention mask, dropout, `Linear(hidden, 3)` head, trained with a plain
+PyTorch loop (no Trainer) against KL-divergence soft targets. Lives under
+`reflex_sentry/models/stage_b.py` (train/predict) and `reflex_sentry/models/export_onnx.py`
+(ONNX export, int8 quantization, parity check, onnxruntime CPU predictor). Training runs on
+Kaggle GPU (`notebooks/02_stage_b_train.ipynb`); export/quantize/predict run locally on CPU
+(`scripts/run_stage_b_local.sh`), since the model actually deployed is the CPU one.
+
+```bash
+pip install -e ".[stage_b]"   # torch, transformers>=4.48, onnx, onnxruntime, optimum
+
+# On Kaggle (see notebooks/02_stage_b_train.ipynb):
+python -m reflex_sentry.models.stage_b train --base answerdotai/ModernBERT-base --out models/stage_b
+python -m reflex_sentry.models.stage_b predict --model models/stage_b --splits val test test_ood test_evasion
+
+# Locally, after downloading models/stage_b from Kaggle:
+bash scripts/run_stage_b_local.sh
+```
+
+- **Checkpoint selection never touches gold labels.** README reserves `val` for temperature
+  scaling and threshold selection only, so it must not decide which training epoch is kept.
+  `train()` instead splits the merged training pool itself into train/dev (`dev_ratio`,
+  default 10%), stratified by soft-target argmax with a fixed seed and grouped by `dup_group`
+  when that column is present (so near-duplicate rows never split across the two sides,
+  mirroring `reflex_sentry/data/split.py`). The checkpoint with the lowest dev KL/log-loss
+  (against the dev rows' own soft targets, the same loss used for training) is kept.
+  `val_parquet` is optional and purely informational when given: its NLL-vs-gold and
+  recall-at-a-val-selected-threshold are logged and recorded in `metadata.json` per epoch, but
+  never influence training or selection -- `tests/test_stage_b.py::test_training_selects_identically_without_val`
+  runs the same training twice, with and without `val.parquet` present, and asserts the
+  selected epoch and the saved head weights are bit-identical.
+- **Loss.** KL(soft target || model), batchmean, in the fixed `[safe, dangerous, unsure]`
+  order used everywhere downstream (`t_safe`/`t_dangerous`/`t_unsure` in
+  `data/interim/soft_targets.parquet`; `logit_safe`/`logit_dangerous`/`logit_unsure` in the
+  logits CSVs; matches `reflex_sentry.eval.calibrate.GOLD_TO_CLASS`).
+- **Outputs.** `models/stage_b/`: HF `save_pretrained` encoder + tokenizer, `head.pt` (pooling
+  head state dict), `metadata.json` (base model, param count, max_len, epochs, lr, seed, plus
+  every other hyperparameter, dev/val metrics per epoch, and the selected epoch).
+  `preds/stage_b_{split}_logits.csv` for fp32, `preds/stage_b_int8_{split}_logits.csv` for the
+  quantized model, both consumed by `reflex_sentry.eval.calibrate`/`run_all`.
+- **Latency.** `latency_ms` is real per-prompt wall time at batch size 1 on CPU, measured for a
+  random sample (`--latency-sample`, default 200) of each split rather than every row; the rest
+  get `NaN`, and `metrics.latency()` already drops `NaN` before computing p50/p95/p99, so
+  percentiles reflect the sampled subset. The int8 onnxruntime predictor's
+  `intra_op_num_threads` defaults to 1 to mimic a single-core gate deployment.
+- **ONNX export.** `torch.onnx.export` with dynamic batch and sequence axes, opset 17, a single
+  `logits` output (the 3-way head). Torch >= 2.6 defaults to the dynamo-based exporter, which
+  needs the optional `onnxscript` package and a different (`dynamic_shapes`) API; `export_onnx.py`
+  passes `dynamo=False` to force the legacy TorchScript-based exporter instead, which takes
+  `dynamic_axes` directly with no extra dependency.
+- **Parity check.** Compares fp32 torch vs fp32 onnx vs int8 onnx logits on `val`: max abs
+  logit diff and argmax agreement for each pair, plus dangerous recall at the fp32-selected
+  threshold for all three. If int8 recall differs from fp32 recall by more than 0.02 at that
+  threshold, it prints a loud banner and raises a `UserWarning` (README 4.5: confirm the
+  quantized model matches fp32 within noise before running any test set) -- it does not raise
+  a hard error, since a human still has to decide whether to proceed or re-quantize/re-train.
+- **Tests.** `tests/test_stage_b.py` builds a tiny, randomly initialized 2-layer/hidden-32
+  `BertConfig` encoder plus a `PreTrainedTokenizerFast` wrapping a `WordLevel` tokenizer trained
+  locally on a handful of sentences (no network, no download), and covers: forward shapes; mean
+  pooling correctly ignoring padding; KL loss decreasing over a few optimizer steps; the
+  train/predict CLI end to end on a synthetic pool, with the written logits CSV validated
+  against `reflex_sentry.eval.calibrate`/`metrics`; the dev-split grouping-by-`dup_group`
+  invariant; identical checkpoint selection with and without `val.parquet`; and ONNX
+  export/int8/parity (skipped cleanly via `pytest.importorskip` when `onnx`/`onnxruntime` are
+  not installed). torch/transformers/onnx/onnxruntime/optimum are all imported lazily, so every
+  module here stays importable without them.
+
 ## Open questions
 
 - **OOD holdout source.** `toxic_chat` is the default, but this should be revisited once per-source in-scope counts are known after the M1 scope filter runs; a source with too few in-scope prompts is a poor holdout.
