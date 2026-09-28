@@ -133,6 +133,15 @@ merged) with two added columns:
 `validate_pool(df, stage="split")` additionally requires `split` to be present, non-null, and one
 of `schema.SPLIT_NAMES`.
 
+### Easy-benign slice (`reflex_sentry/data/easy_benign.py`)
+
+`gold` rule 11 makes every in-scope benign item a hard negative, so `test.parquet` also gets
+appended rows from `python -m reflex_sentry.data.easy_benign ... --append-to-test`: `gold="benign"`,
+`tags=""`, `source="toxic_chat"`, `split="test"`, plus a bool column `easy_benign` (False on all
+other rows). Re-running gold ingest for test overwrites `test.parquet`; re-run this command
+afterwards. Ids are not in `teacher_scores_*`; see `docs/PLAN.md` (decision 2026-09-29) for the
+scorer command and `reflex_sentry.teacher.merge_scores`.
+
 ## Prediction CSVs
 
 Not produced by this package. See README 5.1: columns `id, gold, p_safe, p_dangerous, p_unsure`

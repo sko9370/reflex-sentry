@@ -45,6 +45,23 @@ The 800 sampled items (300 val, 300 test, 200 test_ood) were labeled in two inde
 
 The owner reviewed all 800 items. Drafted labels (Opus two-pass plus adjudication) were accepted without change: val 300/300, test 278/278, test_ood 200/200. The owner hand-labeled 16 test items in the spreadsheet and reviewed 40 more that had only non-model suggestions (TF-IDF neighbors plus source label), accepting 34 and changing 6. The writeup should report this acceptance rate alongside the caveat that review of a draft is not the same as blind independent labeling (anchoring on the shown label is likely).
 
+### 2026-09-29: easy-benign slice added to the test set
+
+Gold labeling rule 11 tags every in-scope benign prompt as a hard negative (every in-scope benign prompt is security-flavored by construction), so `easy_benign_escalation_rate` had n close to 0 and cascade economics could not reweight benign traffic by `hard_negative_share_of_benign`. We add 300 easy-benign rows to `test.parquet` with `python -m reflex_sentry.data.easy_benign` (`--append-to-test`). Source: ToxicChat non-cyber safe prompts (real user prompts, held out of training entirely), out of scope per the prefilter, 20 to 1500 characters, English-looking, deduplicated. Labels come from ToxicChat's human annotation plus prefilter out-of-scope status, not hand review (the owner may spot-check). Tags stay empty so the harness counts them as easy benign. This is what lets cascade economics reweight benign traffic. Operational notes: re-running `reflex_sentry.gold.ingest --split test` overwrites `test.parquet`, so re-run the easy-benign command with `--append-to-test` afterwards (a `test.parquet.bak` is kept on first append), then regenerate every model's test predictions. The new ids are not in teacher_scores; score them on Kaggle with the existing scorer and merge:
+
+```bash
+python -m reflex_sentry.teacher.score --model llama_guard_3_8b \
+    --inputs data/processed/easy_benign_for_teachers.parquet \
+    --out data/interim/teacher_scores_llama_guard_3_8b_easy_benign.parquet \
+    --batch-size 8 --max-length 512 --load-in-4bit
+python -m reflex_sentry.teacher.merge_scores \
+    data/interim/teacher_scores_llama_guard_3_8b.parquet \
+    data/interim/teacher_scores_llama_guard_3_8b_easy_benign.parquet \
+    --out data/interim/teacher_scores_llama_guard_3_8b.parquet
+```
+
+Repeat with `--model qwen3guard_gen_8b` if that teacher is used. The merge drops duplicate ids (first file wins).
+
 ### 2026-09-27: data/ stays out of git
 
 Raw and processed data, gold labels, teacher scores, and model artifacts are never committed. `data/SOURCES.md` is the one exception (license and provenance notes per dataset), and `.gitignore` is written as `data/*` plus `!data/SOURCES.md` so that file can be tracked while everything else under `data/` stays ignored.
