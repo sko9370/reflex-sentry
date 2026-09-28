@@ -127,3 +127,14 @@ def test_run_all_reads_params_from_metadata(workspace):
     table = RA.run(["toy"], processed_dir=workspace["processed"], preds_dir=workspace["preds"],
                     reports_dir=workspace["reports"], models_dir=workspace["models"], config=None)
     assert table.iloc[0]["Params"] == 1155
+
+
+def test_discover_reported_models_orders_and_strips_splits(tmp_path):
+    from reflex_sentry.eval.run_all import discover_reported_models
+
+    for d in ["teacher_both_test", "stage_b_int8_test_evasion", "keyword_val",
+              "stage_a_test_ood", "stage_b_test"]:
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "metrics.json").write_text("{}")
+    assert discover_reported_models(tmp_path) == [
+        "keyword", "stage_a", "stage_b", "stage_b_int8", "teacher_both"]

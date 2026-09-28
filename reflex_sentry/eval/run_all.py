@@ -139,8 +139,24 @@ def _params_for(model: str, models_dir: Path):
         return 0
     meta_path = models_dir / model / "metadata.json"
     if meta_path.exists():
-        return json.loads(meta_path.read_text()).get("params", "n/a")
+        meta = json.loads(meta_path.read_text())
+        return meta.get("params", meta.get("n_params", "n/a"))
     return "n/a"
+
+
+MODEL_ORDER = ("keyword", "stage_a", "stage_b", "stage_b_int8")
+
+
+def discover_reported_models(reports_dir: Path) -> list[str]:
+    """Model names with at least one reports/<model>_<split>/metrics.json."""
+    found = set()
+    for mfile in Path(reports_dir).glob("*/metrics.json"):
+        name = mfile.parent.name
+        for split in sorted(SPLITS, key=len, reverse=True):
+            if name.endswith("_" + split):
+                found.add(name[: -len(split) - 1])
+                break
+    return sorted(found, key=lambda m: (MODEL_ORDER.index(m) if m in MODEL_ORDER else len(MODEL_ORDER), m))
 
 
 def build_comparison(models, processed_dir: Path, preds_dir: Path, reports_dir: Path,
@@ -187,7 +203,11 @@ def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
         calibrate_model(model, preds_dir)
         report_model(model, processed_dir, preds_dir, reports_dir, config)
 
-    table = build_comparison(models, processed_dir, preds_dir, reports_dir, models_dir)
+    # The table covers every model that has reports, not only the ones scored
+    # in this call, so running one model does not drop the others' rows.
+    table_models = discover_reported_models(reports_dir)
+    table_models += [m for m in models if m not in table_models]
+    table = build_comparison(table_models, processed_dir, preds_dir, reports_dir, models_dir)
     table.to_csv(reports_dir / "comparison.csv", index=False)
     (reports_dir / "comparison.md").write_text(
         "# Model comparison\n\n" + table.to_markdown(index=False) + "\n")
