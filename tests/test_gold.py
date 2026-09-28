@@ -131,10 +131,11 @@ def test_ingest_rejects_cat_tag_on_non_dangerous():
         I.validate(I.normalize(df, 1, "2026-09-27"))
 
 
-def test_ingest_rejects_hn_tag_without_hard_negative():
+def test_ingest_adds_implied_hard_negative_tag():
     df = pd.DataFrame([_gold_row(1, "t", "s", "benign", tags="hn:detection")])
-    with pytest.raises(I.GoldValidationError, match="requires the hard_negative tag"):
-        I.validate(I.normalize(df, 1, "2026-09-27"))
+    out = I.normalize(df, 1, "2026-09-27")
+    assert out.loc[0, "tags"] == "hard_negative;hn:detection"
+    I.validate(out)
 
 
 def test_ingest_rejects_missing_and_unknown_ids():

@@ -93,6 +93,11 @@ def normalize(df: pd.DataFrame, default_pass: int, default_date: str) -> pd.Data
         if c not in df.columns:
             df[c] = ""
         df[c] = df[c].fillna("").astype(str).str.strip()
+    # hn:* always implies hard_negative; add it when a hand-filled sheet omits it.
+    df["tags"] = df["tags"].map(
+        lambda s: join_tags([HARD_NEGATIVE_TAG, *split_tags(s)])
+        if any(t.startswith("hn:") for t in split_tags(s)) and HARD_NEGATIVE_TAG not in split_tags(s)
+        else s)
     if "labeler_pass" not in df.columns or df["labeler_pass"].isna().all():
         df["labeler_pass"] = default_pass
     else:
