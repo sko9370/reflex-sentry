@@ -241,7 +241,7 @@ Kaggle GPU (`notebooks/02_stage_b_train.ipynb`); export/quantize/predict run loc
 (`scripts/run_stage_b_local.sh`), since the model actually deployed is the CPU one.
 
 ```bash
-pip install -e ".[stage_b]"   # torch, transformers>=4.48, onnx, onnxruntime, optimum
+pip install -e ".[stage_b]"   # torch, transformers>=5.0, onnx, onnxruntime
 
 # On Kaggle (see notebooks/02_stage_b_train.ipynb):
 python -m reflex_sentry.models.stage_b train --base answerdotai/ModernBERT-base --out models/stage_b
@@ -296,7 +296,7 @@ bash scripts/run_stage_b_local.sh
   against `reflex_sentry.eval.calibrate`/`metrics`; the dev-split grouping-by-`dup_group`
   invariant; identical checkpoint selection with and without `val.parquet`; and ONNX
   export/int8/parity (skipped cleanly via `pytest.importorskip` when `onnx`/`onnxruntime` are
-  not installed). torch/transformers/onnx/onnxruntime/optimum are all imported lazily, so every
+  not installed). torch/transformers/onnx/onnxruntime are all imported lazily, so every
   module here stays importable without them.
 
 ## Open questions

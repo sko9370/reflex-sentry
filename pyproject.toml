@@ -26,9 +26,9 @@ stage_a = [
 ]
 stage_b = [
     "torch",
-    "transformers>=4.48",
-    "datasets",
-    "optimum[onnxruntime]",
+    # The Kaggle notebook saves checkpoints with transformers 5.x (its
+    # tokenizer config names v5-only classes), so load them with 5.x too.
+    "transformers>=5.0",
     "onnxruntime",
     "onnx",
 ]
