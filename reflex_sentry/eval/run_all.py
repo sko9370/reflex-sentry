@@ -1,0 +1,214 @@
+"""One command to score and compare several models end to end (README 5.4).
+
+For each model name given:
+
+  (a) makes `data/processed/test_evasion.parquet` from `test.parquet` if it
+      does not exist yet (`reflex_sentry.eval.wrappers`)
+  (b) if `preds/{model}_val_logits.csv` exists (a "student" that writes raw
+      logits), fits a single temperature on it and applies it to every
+      `preds/{model}_{split}_logits.csv` found, writing/overwriting
+      `preds/{model}_{split}.csv` (`reflex_sentry.eval.calibrate`)
+  (c) for the `keyword` model, first scores every available split directly
+      with `reflex_sentry.baselines.keyword_rules` (it has no separate
+      train/predict step); then, for every model, runs
+      `reflex_sentry.eval.report.run` on every split whose prediction CSV
+      and gold file both exist, choosing the threshold on
+      `preds/{model}_val.csv` when it exists, into `reports/{model}_{split}/`
+  (d) after every model is scored, builds `reports/comparison.md` and
+      `reports/comparison.csv` (README 5.4 columns) from each model/split's
+      `metrics.json`
+
+    python -m reflex_sentry.eval.run_all --models keyword stage_a \
+        [--processed-dir data/processed] [--preds-dir preds] \
+        [--reports-dir reports] [--models-dir models] \
+        [--config configs/eval.yaml]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from ..baselines import keyword_rules as K
+from . import calibrate as C
+from . import report as R
+from . import wrappers as W
+
+SPLITS = ("val", "test", "test_ood", "test_evasion")
+
+DEFAULT_PROCESSED_DIR = "data/processed"
+DEFAULT_PREDS_DIR = "preds"
+DEFAULT_REPORTS_DIR = "reports"
+DEFAULT_MODELS_DIR = "models"
+DEFAULT_KEYWORD_RULES = str(Path(__file__).resolve().parents[2] / "configs" / "keyword_rules.yaml")
+
+COMPARISON_COLUMNS = ["Model", "Params", "CPU p50 ms", "AP", "Recall @ t", "Benign esc.",
+                      "Hard-neg esc.", "OOD recall", "Evasion recall", "ECE"]
+
+
+# ------------------------------------------------------------------- (a) ---
+
+def ensure_test_evasion(processed_dir: Path) -> None:
+    test_path = processed_dir / "test.parquet"
+    evasion_path = processed_dir / "test_evasion.parquet"
+    if evasion_path.exists() or not test_path.exists():
+        return
+    df = pd.read_parquet(test_path)
+    W.wrap(df).to_parquet(evasion_path, index=False)
+
+
+# ------------------------------------------------------------------- (c) ---
+
+def score_keyword(processed_dir: Path, preds_dir: Path, rules_path: str) -> None:
+    for split in SPLITS:
+        src = processed_dir / f"{split}.parquet"
+        if not src.exists():
+            continue
+        K.run(str(src), str(preds_dir / f"keyword_{split}.csv"), rules_path)
+
+
+# ------------------------------------------------------------------- (b) ---
+
+def calibrate_model(model: str, preds_dir: Path) -> bool:
+    """Fit temperature on this model's val logits and apply it to every
+    split's logits file found. Returns True if calibration ran."""
+    val_logits_path = preds_dir / f"{model}_val_logits.csv"
+    if not val_logits_path.exists():
+        return False
+    val_df = pd.read_csv(val_logits_path)
+    y = val_df["gold"].map(C.GOLD_TO_CLASS)
+    if y.isna().any() or y.empty:
+        return False
+    T = C.fit_temperature(val_df[C.LOGIT_COLS].to_numpy(dtype=float), y.to_numpy(dtype=int))
+    for split in SPLITS:
+        logits_path = preds_dir / f"{model}_{split}_logits.csv"
+        if not logits_path.exists():
+            continue
+        df = pd.read_csv(logits_path)
+        C.to_predictions(df, T).to_csv(preds_dir / f"{model}_{split}.csv", index=False)
+    return True
+
+
+def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: Path,
+                  config: str | None) -> dict:
+    results: dict = {}
+    val_preds = preds_dir / f"{model}_val.csv"
+    val_arg = str(val_preds) if val_preds.exists() else None
+    for split in SPLITS:
+        gold_path = processed_dir / f"{split}.parquet"
+        preds_path = preds_dir / f"{model}_{split}.csv"
+        if not gold_path.exists() or not preds_path.exists():
+            continue
+        out_dir = reports_dir / f"{model}_{split}"
+        results[split] = R.run(str(preds_path), str(out_dir), val=val_arg, config=config)
+    return results
+
+
+# ------------------------------------------------------------------- (d) ---
+
+def _get(d, *keys, default=None):
+    cur = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return default if cur is None else cur
+
+
+def _fmt(x, pct: bool = False) -> str:
+    if x is None:
+        return "n/a"
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return "n/a"
+    if x != x:  # NaN
+        return "n/a"
+    return f"{100 * x:.2f}%" if pct else f"{x:.3f}"
+
+
+def _read_metrics(reports_dir: Path, model: str, split: str) -> dict | None:
+    path = reports_dir / f"{model}_{split}" / "metrics.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _params_for(model: str, models_dir: Path):
+    if model == "keyword":
+        return 0
+    meta_path = models_dir / model / "metadata.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text()).get("params", "n/a")
+    return "n/a"
+
+
+def build_comparison(models, processed_dir: Path, preds_dir: Path, reports_dir: Path,
+                      models_dir: Path) -> pd.DataFrame:
+    rows = []
+    for model in models:
+        test_m = _read_metrics(reports_dir, model, "test")
+        primary = test_m if test_m is not None else _read_metrics(reports_dir, model, "val")
+        ood_m = _read_metrics(reports_dir, model, "test_ood")
+        evasion_m = _read_metrics(reports_dir, model, "test_evasion")
+
+        rows.append({
+            "Model": model,
+            "Params": _params_for(model, models_dir),
+            "CPU p50 ms": _fmt(_get(primary, "latency_ms", "p50")),
+            "AP": _fmt(_get(primary, "ranking", "average_precision")),
+            "Recall @ t": _fmt(_get(primary, "at_threshold", "dangerous_recall", "value"), pct=True),
+            "Benign esc.": _fmt(_get(primary, "at_threshold", "benign_escalation_rate", "value"), pct=True),
+            "Hard-neg esc.": _fmt(_get(primary, "at_threshold", "hard_negative_escalation_rate", "value"),
+                                  pct=True),
+            "OOD recall": _fmt(_get(ood_m, "at_threshold", "dangerous_recall", "value"), pct=True),
+            "Evasion recall": _fmt(_get(evasion_m, "at_threshold", "dangerous_recall", "value"), pct=True),
+            "ECE": _fmt(_get(primary, "calibration", "ece")),
+        })
+    return pd.DataFrame(rows, columns=COMPARISON_COLUMNS)
+
+
+# --------------------------------------------------------------------- run -
+
+def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
+        preds_dir: str | Path = DEFAULT_PREDS_DIR, reports_dir: str | Path = DEFAULT_REPORTS_DIR,
+        models_dir: str | Path = DEFAULT_MODELS_DIR, config: str | None = None,
+        keyword_rules_path: str = DEFAULT_KEYWORD_RULES) -> pd.DataFrame:
+    processed_dir, preds_dir = Path(processed_dir), Path(preds_dir)
+    reports_dir, models_dir = Path(reports_dir), Path(models_dir)
+    preds_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    ensure_test_evasion(processed_dir)
+
+    for model in models:
+        if model == "keyword":
+            score_keyword(processed_dir, preds_dir, keyword_rules_path)
+        calibrate_model(model, preds_dir)
+        report_model(model, processed_dir, preds_dir, reports_dir, config)
+
+    table = build_comparison(models, processed_dir, preds_dir, reports_dir, models_dir)
+    table.to_csv(reports_dir / "comparison.csv", index=False)
+    (reports_dir / "comparison.md").write_text(
+        "# Model comparison\n\n" + table.to_markdown(index=False) + "\n")
+    return table
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--models", nargs="+", required=True, help="model names, e.g. keyword stage_a")
+    ap.add_argument("--processed-dir", default=DEFAULT_PROCESSED_DIR)
+    ap.add_argument("--preds-dir", default=DEFAULT_PREDS_DIR)
+    ap.add_argument("--reports-dir", default=DEFAULT_REPORTS_DIR)
+    ap.add_argument("--models-dir", default=DEFAULT_MODELS_DIR)
+    ap.add_argument("--config", default=None, help="configs/eval.yaml")
+    ap.add_argument("--keyword-rules", default=DEFAULT_KEYWORD_RULES)
+    a = ap.parse_args()
+    table = run(a.models, a.processed_dir, a.preds_dir, a.reports_dir, a.models_dir, a.config,
+                a.keyword_rules)
+    print(table.to_string(index=False))
+    print(f"comparison table: {Path(a.reports_dir) / 'comparison.md'}")
+
+
+if __name__ == "__main__":
+    main()
