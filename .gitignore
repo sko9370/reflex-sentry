@@ -3,6 +3,7 @@ data/*
 /models/
 reports/*/
 !reports/example_synthetic/
+reports/comparison.*
 /preds/
 *.parquet
 __pycache__/
