@@ -271,39 +271,338 @@ def test_make_dev_split_groups_dup_group():
 
 # --------------------------------------------------------------- export --
 
-def test_export_onnx_int8_parity(tmp_path, tiny_base):
+@pytest.fixture(scope="module")
+def tiny_export(tmp_path_factory, tiny_base):
+    """Train a tiny student for one epoch and export it to fp32 ONNX once; the
+    export tests below share it to stay fast."""
     pytest.importorskip("onnx")
     pytest.importorskip("onnxruntime")
     from reflex_sentry.models import export_onnx as EX
 
+    root = tmp_path_factory.mktemp("tiny_export")
     train_df, targets_df, val_df = _make_synthetic_pool(n=24, n_val=15, seed=2)
-    data_dir = tmp_path / "data"
-    paths = _write_pool(data_dir, train_df, targets_df, val_df)
-
-    model_dir = tmp_path / "model"
+    paths = _write_pool(root / "data", train_df, targets_df, val_df)
+    model_dir = root / "model"
     SB.train(
         base=str(tiny_base), out_dir=model_dir, train_parquet=paths["train"],
         targets_parquet=paths["targets"], val_parquet=paths["val"],
         epochs=1, batch_size=8, eval_batch_size=8, max_len=16, dev_ratio=0.25, seed=4,
     )
-
     onnx_path = EX.export_to_onnx(model_dir)
+    return {"root": root, "model_dir": model_dir, "onnx": onnx_path, "val": paths["val"],
+            "data_dir": root / "data"}
+
+
+def _run_onnx(path: Path, tiny_base) -> np.ndarray:
+    import onnxruntime as ort
+
+    tok = _tiny_tokenizer()
+    enc = tok(SENTENCES[:4], padding=True, return_tensors="np")
+    sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    return sess.run(["logits"], {"input_ids": enc["input_ids"].astype(np.int64),
+                                 "attention_mask": enc["attention_mask"].astype(np.int64)})[0]
+
+
+def test_export_onnx_int8_parity(tiny_export):
+    from reflex_sentry.models import export_onnx as EX
+
+    model_dir, onnx_path, val = tiny_export["model_dir"], tiny_export["onnx"], tiny_export["val"]
     assert onnx_path.exists()
-    int8_path = EX.quantize_int8(onnx_path)
+    int8_path = EX.quantize_int8(onnx_path, tiny_export["root"] / "parity_int8.onnx")
     assert int8_path.exists()
 
-    result = EX.parity_check(model_dir, onnx_path, int8_path, paths["val"], target_recall=0.6)
+    out_json = tiny_export["root"] / "parity_out.json"
+    result = EX.parity_check(model_dir, onnx_path, int8_path, val, target_recall=0.6, out_path=out_json)
     assert result["torch_vs_onnx_fp32"]["max_abs_diff"] < 1e-2
-    assert 0.0 <= result["torch_vs_onnx_fp32"]["argmax_agreement"] <= 1.0
     assert 0.0 <= result["torch_vs_onnx_int8"]["argmax_agreement"] <= 1.0
-    assert "recall_diff" in result and "recall_within_tolerance" in result
+    for key in ("decision_agreement", "fp32", "int8", "diff", "warnings", "ok", "threshold"):
+        assert key in result
+    assert 0.0 <= result["decision_agreement"]["overall"] <= 1.0
+    for side in ("fp32", "int8"):
+        r = result[side]["recall"]
+        assert r["n"] == result["n_dangerous"] == 5 and 0 <= r["k"] <= r["n"]
+        assert r["rate"] == pytest.approx(r["k"] / r["n"])
+        b = result[side]["benign_escalation"]
+        assert b["n"] == result["n_benign"] == 5
+        assert 0.0 <= result[side]["average_precision"] <= 1.0
+        assert 0.0 <= result[side]["roc_auc"] <= 1.0
+    assert result["diff"]["average_precision"] == pytest.approx(
+        result["int8"]["average_precision"] - result["fp32"]["average_precision"])
+    assert result["diff"]["recall_items"] == result["int8"]["recall"]["k"] - result["fp32"]["recall"]["k"]
+    # parity.json was written and is strict JSON
+    saved = json.loads(out_json.read_text())
+    assert saved["decision_agreement"]["overall"] == pytest.approx(result["decision_agreement"]["overall"])
 
-    preds_dir = tmp_path / "preds"
-    written = EX.predict_int8(model_dir, int8_path, ["val"], data_dir=data_dir, out_dir=preds_dir,
-                               latency_sample=5)
+    preds_dir = tiny_export["root"] / "preds"
+    written = EX.predict_int8(model_dir, int8_path, ["val"], data_dir=tiny_export["data_dir"],
+                               out_dir=preds_dir, latency_sample=5, bulk_threads=0, latency_threads=1)
     assert len(written) == 1
     df = pd.read_csv(written[0])
     expected_cols = {"id", "gold", "logit_safe", "logit_dangerous", "logit_unsure",
                       "source", "tags", "latency_ms"}
     assert expected_cols <= set(df.columns)
+    assert df["latency_ms"].notna().sum() == 5  # only the sampled rows are timed
     assert written[0].name == "stage_b_int8_val_logits.csv"
+
+
+def test_parity_metrics_identical_models():
+    from reflex_sentry.models import export_onnx as EX
+
+    rng = np.random.default_rng(0)
+    gold = np.array(["dangerous"] * 20 + ["benign"] * 30 + ["ambiguous"] * 10)
+    logits = rng.normal(size=(60, 3))
+    logits[:20, 1] += 2.0
+    logits[20:50, 0] += 2.0
+    m = EX.parity_metrics(gold, logits, logits, logits, t=0.3)
+    assert m["decision_agreement"]["overall"] == 1.0
+    assert m["decision_agreement"]["dangerous"] == 1.0
+    assert m["decision_agreement"]["n_disagree"] == 0
+    assert m["diff"]["recall_items"] == 0 and m["diff"]["benign_escalation_items"] == 0
+    assert m["diff"]["average_precision"] == 0.0 and m["diff"]["roc_auc"] == 0.0
+    assert m["torch_vs_onnx_int8"]["max_abs_diff"] == 0.0
+    assert m["torch_vs_onnx_int8"]["argmax_agreement"] == 1.0
+    assert m["ok"] and m["warnings"] == []
+    # counts are consistent with an independent computation
+    p_safe = SB._softmax(logits)[:, 0]
+    assert m["fp32"]["recall"] == {"k": int((p_safe[:20] < 0.3).sum()), "n": 20,
+                                   "rate": (p_safe[:20] < 0.3).mean()}
+    assert m["fp32"]["benign_escalation"]["n"] == 30
+    assert m["n_ambiguous"] == 10
+
+
+def test_parity_warning_rule():
+    from reflex_sentry.models import export_onnx as EX
+
+    gold = np.array(["dangerous"] * 48 + ["benign"] * 100)
+    base = np.zeros((148, 3))
+    base[:48, 1] = 3.0   # p_safe small -> escalated
+    base[48:, 0] = 3.0   # p_safe large -> passed
+    # flip exactly one dangerous row to "pass" in int8: 1 item on 48 is within tolerance
+    one = base.copy()
+    one[0] = [3.0, 0.0, 0.0]
+    m1 = EX.parity_metrics(gold, base, base, one, t=0.5)
+    assert m1["diff"]["recall_items"] == -1
+    assert not any("recall" in w for w in m1["warnings"])
+    assert m1["decision_agreement"]["overall"] == pytest.approx(147 / 148)
+    # two items exceed max(1 item, 2 points)
+    two = one.copy()
+    two[1] = [3.0, 0.0, 0.0]
+    m2 = EX.parity_metrics(gold, base, base, two, t=0.5)
+    assert any("recall" in w for w in m2["warnings"]) and not m2["ok"]
+    # heavy disagreement trips the agreement rule
+    many = base.copy()
+    many[48:60] = [0.0, 3.0, 0.0]
+    m3 = EX.parity_metrics(gold, base, base, many, t=0.5)
+    assert any("decision agreement" in w for w in m3["warnings"])
+
+
+def test_quant_config_presets_and_overrides():
+    from reflex_sentry.models import export_onnx as EX
+
+    d = EX.resolve_quant_config("default")
+    assert (d.per_channel, d.op_types, d.exclude_head, d.reduce_range, d.weight_type) == \
+        (True, ("MatMul",), True, False, "qint8")
+    legacy = EX.resolve_quant_config("legacy")
+    assert (legacy.per_channel, legacy.op_types, legacy.exclude_head) == (False, None, False)
+    o = EX.resolve_quant_config("default", per_channel=False, op_types=["all"], weight_type="quint8")
+    assert (o.per_channel, o.op_types, o.weight_type) == (False, None, "quint8")
+    assert EX.SWEEP_CONFIGS == ["legacy", "matmul_per_channel", "matmul_per_channel_exclude_head",
+                                "matmul_per_channel_exclude_head_reduce_range"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"preset": "legacy"},
+    {},
+    {"reduce_range": True},
+    {"weight_type": "quint8", "per_channel": False},
+    {"op_types": ["MatMul", "Gemm"]},
+])
+def test_quantize_options_produce_runnable_onnx(tiny_export, tiny_base, kwargs):
+    import onnx
+    from reflex_sentry.models import export_onnx as EX
+
+    out = tiny_export["root"] / f"q_{abs(hash(json.dumps(kwargs, sort_keys=True)))}.onnx"
+    path = EX.quantize_int8(tiny_export["onnx"], out, **kwargs)
+    onnx.checker.check_model(str(path))
+    logits = _run_onnx(path, tiny_base)
+    assert logits.shape == (4, 3) and np.isfinite(logits).all()
+
+
+def _matmul_head_model(path: Path) -> None:
+    """x -> /encoder/MatMul -> Relu -> /head/MatMul -> Add -> logits, with
+    named nodes and constant weights, so the head is a plain MatMul."""
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    rng = np.random.default_rng(0)
+    w1 = numpy_helper.from_array(rng.normal(size=(8, 8)).astype(np.float32), "w_enc")
+    w2 = numpy_helper.from_array(rng.normal(size=(8, 3)).astype(np.float32), "w_head")
+    bias = numpy_helper.from_array(np.zeros(3, dtype=np.float32), "b_head")
+    nodes = [
+        helper.make_node("MatMul", ["x", "w_enc"], ["h"], name="/encoder/MatMul"),
+        helper.make_node("Relu", ["h"], ["r"], name="/encoder/Relu"),
+        helper.make_node("MatMul", ["r", "w_head"], ["m"], name="/head/MatMul"),
+        helper.make_node("Add", ["m", "b_head"], ["logits"], name="/head/Add"),
+    ]
+    graph = helper.make_graph(
+        nodes, "g", [helper.make_tensor_value_info("x", TensorProto.FLOAT, ["b", 8])],
+        [helper.make_tensor_value_info("logits", TensorProto.FLOAT, ["b", 3])], [w1, w2, bias])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.save(model, str(path))
+
+
+def _matmul_state(path: Path) -> dict:
+    """{node name: 'fp32' | 'int8'} for the two encoder/head matmuls, from the
+    quantized graph: a quantized MatMul becomes MatMulInteger (+ int8 weight)."""
+    import onnx
+
+    m = onnx.load(str(path))
+    ops = {n.name: n.op_type for n in m.graph.node}
+    inits = {i.name: i.data_type for i in m.graph.initializer}
+    out = {}
+    for base in ("/encoder/MatMul", "/head/MatMul"):
+        if ops.get(base) == "MatMul":
+            out[base] = "fp32"
+        else:
+            out[base] = "int8"
+    out["_init_types"] = set(inits.values())
+    return out
+
+
+def test_find_head_nodes_by_name_and_by_graph(tmp_path):
+    import onnx
+    from onnx import helper
+    from reflex_sentry.models import export_onnx as EX
+
+    path = tmp_path / "m.onnx"
+    _matmul_head_model(path)
+    model = onnx.load(str(path))
+    assert EX.find_head_nodes(model) == ["/head/MatMul"]
+    # no "head" in the names: the last MatMul feeding the output is still found
+    for n in model.graph.node:
+        n.name = n.name.replace("head", "cls")
+    assert EX.find_head_nodes(model) == ["/cls/MatMul"]
+
+
+def test_exclude_head_keeps_head_fp32(tmp_path):
+    import onnx
+    from onnx import TensorProto
+    from reflex_sentry.models import export_onnx as EX
+
+    src = tmp_path / "m.onnx"
+    _matmul_head_model(src)
+
+    excluded = EX.quantize_int8(src, tmp_path / "ex.onnx", exclude_head=True, op_types=["MatMul"])
+    included = EX.quantize_int8(src, tmp_path / "in.onnx", exclude_head=False, op_types=["MatMul"])
+
+    ex_state, in_state = _matmul_state(excluded), _matmul_state(included)
+    assert ex_state["/encoder/MatMul"] == "int8"
+    assert ex_state["/head/MatMul"] == "fp32"          # head untouched
+    assert in_state["/head/MatMul"] == "int8"           # control: quantized when not excluded
+    ex_model = onnx.load(str(excluded))
+    head_w = next(i for i in ex_model.graph.initializer if i.name == "w_head")
+    assert head_w.data_type == TensorProto.FLOAT       # head weight stays fp32
+    assert any(n.op_type == "MatMulInteger" for n in ex_model.graph.node)  # encoder is int8
+
+
+def test_tiny_model_head_is_fp32_by_default(tiny_export):
+    """The exported head is a Gemm. onnxruntime rewrites Gemm to MatMul+Add and
+    would quantize it even with op_types=[MatMul], so this guards the
+    `<name>_MatMul` exclusion alias as well as the plain name."""
+    import onnx
+    from onnx import TensorProto
+    from reflex_sentry.models import export_onnx as EX
+
+    fp32_model = onnx.load(str(tiny_export["onnx"]))
+    head_nodes = EX.find_head_nodes(fp32_model)
+    assert head_nodes == ["/head/Gemm"]
+    assert EX.find_head_nodes(fp32_model, gemm_aliases=True) == ["/head/Gemm", "/head/Gemm_MatMul"]
+
+    def quantized(path):
+        m = onnx.load(str(path))
+        head_int = [n for n in m.graph.node if "/head/" in n.name and n.op_type == "MatMulInteger"]
+        inits = {i.name: i.data_type for i in m.graph.initializer}
+        return m, head_int, inits
+
+    kept = EX.quantize_int8(tiny_export["onnx"], tiny_export["root"] / "default_q.onnx")
+    m, head_int, inits = quantized(kept)
+    assert not head_int                                       # head not integer-quantized
+    assert inits["head.weight"] == TensorProto.FLOAT          # head weight stays fp32
+    assert "head.weight_quantized" not in inits
+    assert any(n.op_type == "MatMulInteger" for n in m.graph.node)  # encoder matmuls are int8
+    # embeddings stay fp32 with the default op-type restriction: no quantized Gather data
+    assert not any(i.endswith("embeddings.word_embeddings.weight_quantized") for i in inits)
+
+    # control: without exclusion the head is quantized
+    m2, head_int2, inits2 = quantized(
+        EX.quantize_int8(tiny_export["onnx"], tiny_export["root"] / "nohead_q.onnx", exclude_head=False))
+    assert head_int2 and inits2["head.weight_quantized"] == TensorProto.INT8
+
+
+def test_quantize_preprocess_flag(tiny_export, tiny_base):
+    from reflex_sentry.models import export_onnx as EX
+
+    path = EX.quantize_int8(tiny_export["onnx"], tiny_export["root"] / "pre_q.onnx", preprocess=True)
+    logits = _run_onnx(path, tiny_base)
+    assert logits.shape == (4, 3) and np.isfinite(logits).all()
+
+
+def test_sweep_end_to_end_and_choose(tiny_export):
+    import shutil
+    from reflex_sentry.models import export_onnx as EX
+
+    # work on a copy of the model dir so metadata.json edits do not leak into other tests
+    model_dir = tiny_export["root"] / "model_sweep"
+    if model_dir.exists():
+        shutil.rmtree(model_dir)
+    shutil.copytree(tiny_export["model_dir"], model_dir)
+    onnx_path = model_dir / "model.onnx"
+
+    # lenient rule so the random tiny model deterministically passes and --choose has something to pick
+    EX.main(["sweep", "--model", str(model_dir), "--onnx", str(onnx_path), "--val", str(tiny_export["val"]),
+             "--target-recall", "0.6", "--latency-sample", "6", "--choose",
+             "--min-decision-agreement", "0.0", "--max-recall-diff", "1.0", "--max-ap-drop", "1.0"])
+
+    for name in EX.SWEEP_CONFIGS:
+        assert (model_dir / "sweep" / f"{name}.onnx").exists()
+    assert (model_dir / "sweep.md").exists()
+    sw = json.loads((model_dir / "sweep.json").read_text())
+    assert [r["name"] for r in sw["results"]] == EX.SWEEP_CONFIGS
+    for r in sw["results"]:
+        assert r["latency"]["p50_ms"] > 0 and r["latency"]["p95_ms"] >= r["latency"]["p50_ms"]
+        assert 0.0 <= r["parity"]["decision_agreement"]["overall"] <= 1.0
+        assert r["parity"]["ok"]
+    assert sw["fp32_onnx_latency"]["p50_ms"] > 0
+    assert sw["chosen"] in EX.SWEEP_CONFIGS
+
+    # chosen = highest agreement, ties by lower p50
+    best = min(sw["results"], key=lambda r: (-r["parity"]["decision_agreement"]["overall"],
+                                             r["latency"]["p50_ms"]))
+    assert sw["chosen"] == best["name"]
+
+    chosen_file = model_dir / "model_int8.onnx"
+    assert chosen_file.exists()
+    assert chosen_file.read_bytes() == (model_dir / "sweep" / f"{sw['chosen']}.onnx").read_bytes()
+    meta = json.loads((model_dir / "metadata.json").read_text())
+    assert meta["int8_quantization"]["config_name"] == sw["chosen"]
+    assert "config" in meta["int8_quantization"] and "latency" in meta["int8_quantization"]
+    assert "base" in meta  # original metadata preserved
+
+
+def test_sweep_choose_refuses_when_nothing_passes(tiny_export):
+    import shutil
+    from reflex_sentry.models import export_onnx as EX
+
+    model_dir = tiny_export["root"] / "model_sweep_fail"
+    if model_dir.exists():
+        shutil.rmtree(model_dir)
+    shutil.copytree(tiny_export["model_dir"], model_dir)
+    result = EX.sweep(model_dir, model_dir / "model.onnx", tiny_export["val"], configs=["legacy"],
+                      choose=True, target_recall=0.6, latency_sample=3, min_decision_agreement=1.01)
+    assert result["chosen"] is None
+    assert not (model_dir / "model_int8.onnx").exists()
+    with pytest.raises(SystemExit):
+        EX.main(["sweep", "--model", str(model_dir), "--onnx", str(model_dir / "model.onnx"),
+                 "--val", str(tiny_export["val"]), "--configs", "legacy", "--choose", "--latency-sample", "3",
+                 "--target-recall", "0.6", "--min-decision-agreement", "1.01"])

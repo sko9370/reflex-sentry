@@ -186,7 +186,7 @@ target   = [ (1 - p) * (1 - u),  p * (1 - u),  u ]   # [safe, dangerous, unsure]
 
 ### 4.5 Calibration and export
 
-Fit a single temperature `T` on `val` logits (`reflex_sentry.eval.calibrate.fit_temperature`). Export to ONNX, quantize to int8, and confirm the quantized model's metrics on `val` match the fp32 model within noise before running any test set.
+Fit a single temperature `T` on `val` logits (`reflex_sentry.eval.calibrate.fit_temperature`). Export to ONNX, quantize to int8, and confirm the quantized model's metrics on `val` match the fp32 model within noise before running any test set. The check that matters is the gate's decision: `export_onnx parity` reports, at the fp32-selected threshold, the share of val rows where fp32 and int8 make the same escalate/pass decision (`p_safe < t`), recall and benign escalation as counts, and average precision / ROC-AUC of `1 - p_safe`, and warns if decision agreement is below 0.97, recall differs by more than max(1 item, 2 points), or AP drops by more than 0.01. `export_onnx sweep --choose` tries several quantization configs (default: MatMul only, per-channel, classifier head kept in fp32) and keeps the best passing one as `models/stage_b/model_int8.onnx`; see `scripts/run_stage_b_local.sh`.
 
 ---
 
