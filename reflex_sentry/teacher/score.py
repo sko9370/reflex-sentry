@@ -244,6 +244,18 @@ def _to_model_device(enc, model):
     return {k: v.to(device) for k, v in enc.items()} if device is not None else enc
 
 
+def _forward_last_logits(model, enc):
+    """Next-token logits at the last position, with position ids that ignore
+    left padding (otherwise each row's positions shift by its pad count)."""
+    import torch
+
+    mask = enc["attention_mask"]
+    position_ids = (mask.long().cumsum(-1) - 1).clamp(min=0)
+    with torch.no_grad():
+        out = model(input_ids=enc["input_ids"], attention_mask=mask, position_ids=position_ids)
+    return out.logits[:, -1, :].float().cpu().numpy()
+
+
 def _chat_prompt_strings(tokenizer, texts: list[str]) -> list[str]:
     return [
         tokenizer.apply_chat_template(
@@ -266,16 +278,29 @@ def make_llama_guard_score_fn(
         f"shared_prefix={prefix_ids!r}"
     )
     prefix_str = tokenizer.decode(prefix_ids) if prefix_ids else ""
+    _warned_steps: list[bool] = []
 
     def score_fn(texts: list[str]) -> list[dict]:
         texts = truncate_user_texts(tokenizer, texts, max_length)
         prompts = [p + prefix_str for p in _chat_prompt_strings(tokenizer, texts)]
-        enc = _to_model_device(tokenizer(
-            prompts, return_tensors="pt", padding=True, add_special_tokens=False,
-        ), model)
-        with torch.no_grad():
-            out = model(**enc)
-        last_logits = out.logits[:, -1, :].float().cpu().numpy()
+        # Llama Guard 3 emits "\n\n" before the verdict word. If the top
+        # next token is not a verdict token, append it and read one step
+        # later (at most max_verdict_steps extra steps).
+        for step in range(preset.get("max_verdict_steps", 2) + 1):
+            enc = _to_model_device(tokenizer(
+                prompts, return_tensors="pt", padding=True, add_special_tokens=False,
+            ), model)
+            last_logits = _forward_last_logits(model, enc)
+            top = last_logits.argmax(axis=1)
+            needs = [i for i, t in enumerate(top) if int(t) not in (safe_id, unsafe_id)]
+            if not needs or step == preset.get("max_verdict_steps", 2):
+                break
+            if not _warned_steps:
+                print(f"[llama_guard] top token before verdict is "
+                      f"{tokenizer.decode([int(top[needs[0]])])!r}; reading one step later")
+                _warned_steps.append(True)
+            prompts = [p + tokenizer.decode([int(top[i])]) if i in needs else p
+                       for i, p in enumerate(prompts)]
 
         gen_enc = _to_model_device(tokenizer(
             _chat_prompt_strings(tokenizer, texts), return_tensors="pt", padding=True,
@@ -295,7 +320,7 @@ def make_llama_guard_score_fn(
                 "p_unsafe_teacher": p_unsafe,
                 "p_controversial": np.nan,
                 "teacher_category": parse_llama_guard_category(continuations[i], preset),
-                "teacher_raw": continuations[i].strip()[:60],
+                "teacher_raw": continuations[i][:60],
             })
         return rows
 
@@ -321,9 +346,7 @@ def make_qwen_guard_score_fn(
         enc = _to_model_device(tokenizer(
             prompts, return_tensors="pt", padding=True, add_special_tokens=False,
         ), model)
-        with torch.no_grad():
-            out = model(**enc)
-        last_logits = out.logits[:, -1, :].float().cpu().numpy()
+        last_logits = _forward_last_logits(model, enc)
 
         with torch.no_grad():
             gen = model.generate(**enc, max_new_tokens=preset["category_max_new_tokens"], do_sample=False)
@@ -339,7 +362,7 @@ def make_qwen_guard_score_fn(
                 "p_unsafe_teacher": p_unsafe,
                 "p_controversial": p_ctrl,
                 "teacher_category": parse_qwen_guard_category(continuations[i], preset),
-                "teacher_raw": continuations[i].strip()[:60],
+                "teacher_raw": continuations[i][:60],
             })
         return rows
 

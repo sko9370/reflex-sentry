@@ -360,3 +360,61 @@ def test_run_scorer_persists_teacher_raw(tmp_path):
     run_scorer(fake, [str(inp)], str(out), "fake", batch_size=2, checkpoint_every=1)
     df = pd.read_parquet(out)
     assert len(df) == 3 and (df["teacher_raw"] == "safe").all()
+
+
+def test_llama_guard_reads_verdict_after_leading_newlines():
+    """The model emits '\\n\\n' before the verdict word; the scorer must read
+    the verdict one or two steps later instead of at the template end."""
+    torch = pytest.importorskip("torch")
+
+    class CharTok:
+        pad_token_id = 0
+
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+            return "U:" + messages[0]["content"] + "|A:"
+
+        def encode(self, s, add_special_tokens=False):
+            return [ord(c) for c in s]
+
+        def decode(self, ids):
+            return "".join(chr(int(i)) for i in ids)
+
+        def batch_decode(self, rows, skip_special_tokens=True):
+            return [self.decode([i for i in r if int(i) != 0]) for r in rows]
+
+        def __call__(self, texts, return_tensors=None, padding=False, add_special_tokens=False, **_):
+            if isinstance(texts, str):
+                return {"input_ids": self.encode(texts)}
+            ids = [self.encode(t) for t in texts]
+            n = max(map(len, ids))
+            input_ids = torch.tensor([[0] * (n - len(r)) + r for r in ids])
+            mask = torch.tensor([[0] * (n - len(r)) + [1] * len(r) for r in ids])
+            return {"input_ids": input_ids, "attention_mask": mask}
+
+    class NewlineThenVerdict:
+        """Next token: '\\n' after ':' or after one '\\n'; then 'u' (unsafe) if
+        the prompt contains 'X', else 's' (safe)."""
+
+        def __call__(self, input_ids, attention_mask=None, position_ids=None):
+            B, L = input_ids.shape
+            logits = torch.zeros(B, L, 256)
+            for b in range(B):
+                row = [int(i) for i in input_ids[b] if int(i) != 0]
+                tail = "".join(chr(i) for i in row[-2:])
+                if tail.endswith(":") or tail == ":\n":
+                    logits[b, -1, 10] = 10.0
+                else:
+                    bad = ord("X") in row
+                    logits[b, -1, ord("u")] = 5.0 if bad else -5.0
+                    logits[b, -1, ord("s")] = -5.0 if bad else 5.0
+            return type("Out", (), {"logits": logits})()
+
+        def generate(self, input_ids, attention_mask=None, max_new_tokens=8, do_sample=False):
+            add = torch.tensor([[10, 10, ord("s")]] * input_ids.shape[0])
+            return torch.cat([input_ids, add], dim=1)
+
+    preset = dict(score.PRESETS["llama_guard_3_8b"])
+    fn = score.make_llama_guard_score_fn(NewlineThenVerdict(), CharTok(), preset, max_length=512)
+    rows = fn(["benign question", "contains X marker"])
+    assert rows[0]["p_unsafe_teacher"] < 0.01
+    assert rows[1]["p_unsafe_teacher"] > 0.99
