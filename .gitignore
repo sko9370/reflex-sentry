@@ -1,9 +1,9 @@
 data/*
 !data/SOURCES.md
-models/
+/models/
 reports/*/
 !reports/example_synthetic/
-preds/
+/preds/
 *.parquet
 __pycache__/
 .ipynb_checkpoints/
