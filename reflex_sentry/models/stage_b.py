@@ -33,13 +33,13 @@ import argparse
 import copy
 import json
 import random
-import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from reflex_sentry.eval import latency as L
 from reflex_sentry.eval.calibrate import GOLD_TO_CLASS
 
 try:  # pragma: no cover - exercised indirectly by torch-gated tests
@@ -203,29 +203,31 @@ def infer_logits(student, tokenizer, texts: list[str], max_len: int, device: str
     return np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 3), dtype=np.float32)
 
 
-def measure_latency_ms(student, tokenizer, texts: list[str], max_len: int, device: str, sample_size: int) -> dict[int, float]:
-    """Per-prompt wall-clock latency at batch size 1, CPU, on a random sample
-    of `sample_size` rows (documented in README 5.1: 'latency_ms ... per-prompt
-    wall time'). Measuring every row at batch 1 would be needlessly slow for
-    large splits, so only the sampled indices get a value; the rest are NaN in
-    the output CSV and metrics.latency() drops NaNs before computing p50/p95/p99,
-    so percentiles reflect the sampled subset."""
+def measure_latency_ms(student, tokenizer, texts: list[str], max_len: int, device: str, sample_size: int,
+                        threads: int = 1) -> dict[int, float]:
+    """Per-prompt, batch-size-1 CPU latency using the shared protocol in
+    `reflex_sentry.eval.latency` (README 5.4: a single-core gate, batch 1,
+    raw text in -> probabilities out). Tokenization, the forward pass, and
+    the softmax are all inside the timed region; `threads` (default 1, see
+    `--latency-threads`) pins the torch thread count for that region only.
+    Measuring every row at batch 1 would be needlessly slow for large
+    splits, so only a fixed-seed sample gets a value; the rest are NaN in
+    the output CSV and metrics.latency() drops NaNs before computing
+    p50/p95/p99, so percentiles reflect the sampled subset."""
     _require_torch()
     student.eval()
-    idx = list(range(len(texts)))
-    rng = random.Random(0)
-    sample = idx if len(idx) <= sample_size else rng.sample(idx, sample_size)
-    out: dict[int, float] = {}
-    with torch.no_grad():
-        for i in sample:
-            enc = tokenizer([texts[i]], truncation=True, max_length=max_len, padding=True, return_tensors="pt")
-            input_ids = enc["input_ids"].to(device)
-            attention_mask = enc["attention_mask"].to(device)
-            t0 = time.perf_counter()
-            student(input_ids, attention_mask)
-            t1 = time.perf_counter()
-            out[i] = (t1 - t0) * 1000.0
-    return out
+
+    def _predict_one(batch: list[str]) -> np.ndarray:
+        enc = tokenizer(batch, truncation=True, max_length=max_len, padding=True, return_tensors="pt")
+        input_ids = enc["input_ids"].to(device)
+        attention_mask = enc["attention_mask"].to(device)
+        with torch.no_grad():
+            logits = student(input_ids, attention_mask)
+            probs = torch.softmax(logits, dim=-1)
+        return probs.detach().cpu().numpy()
+
+    with L.single_thread(threads):
+        return L.time_per_prompt(_predict_one, texts, sample_size=sample_size)
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -479,8 +481,11 @@ def train(
 # ---------------------------------------------------------------- predict --
 
 def predict_split(student, tokenizer, split: str, data_dir: str | Path, out_dir: str | Path, max_len: int,
-                   device: str, batch_size: int = 64, latency_sample: int = 200,
-                   filename_prefix: str = "stage_b") -> Path | None:
+                   device: str, batch_size: int = 64, latency_sample: int = 200, latency_threads: int = 1,
+                   filename_prefix: str = "stage_b", latency_sink: list[float] | None = None) -> Path | None:
+    """`latency_sink`, if given, is extended with this split's sampled
+    per-prompt latencies (ms) -- used by `predict` to pool them across
+    splits into one model-level latency sidecar."""
     path = Path(data_dir) / f"{split}.parquet"
     if not path.exists():
         print(f"[{filename_prefix} predict] {split}: {path} not found, skipping")
@@ -490,7 +495,10 @@ def predict_split(student, tokenizer, split: str, data_dir: str | Path, out_dir:
         raise ValueError(f"{path} missing required columns id, text")
     texts = df["text"].tolist()
     logits = infer_logits(student, tokenizer, texts, max_len, device, batch_size=batch_size)
-    latencies = measure_latency_ms(student, tokenizer, texts, max_len, device, latency_sample)
+    latencies = measure_latency_ms(student, tokenizer, texts, max_len, device, latency_sample,
+                                    threads=latency_threads)
+    if latency_sink is not None:
+        latency_sink.extend(latencies.values())
 
     out = pd.DataFrame({
         "id": df["id"],
@@ -514,17 +522,29 @@ def predict_split(student, tokenizer, split: str, data_dir: str | Path, out_dir:
 
 def predict(model_dir: str | Path, splits: list[str], data_dir: str | Path = "data/processed",
             out_dir: str | Path = "preds", batch_size: int = 64, latency_sample: int = 200,
-            device: str | None = None) -> list[Path]:
+            latency_threads: int = 1, device: str | None = None) -> list[Path]:
+    """Writes per-split logits CSVs plus one pooled latency sidecar,
+    `<out_dir>/stage_b_latency.json` (README 5.4: latency does not belong in
+    the logits CSV, and predict should not rewrite training metadata.json),
+    recording the shared protocol (`reflex_sentry.eval.latency`: batch 1,
+    `latency_threads` CPU thread(s), tokenization+forward+softmax timed,
+    fixed sample) and p50/p95 pooled across every split's sampled latencies."""
     _require_torch()
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     student, tokenizer, metadata = load_student(model_dir, device=device)
     max_len = int(metadata.get("max_len", 256))
     written = []
+    latency_values: list[float] = []
     for split in splits:
         p = predict_split(student, tokenizer, split, data_dir, out_dir, max_len, device,
-                           batch_size=batch_size, latency_sample=latency_sample)
+                           batch_size=batch_size, latency_sample=latency_sample,
+                           latency_threads=latency_threads, latency_sink=latency_values)
         if p is not None:
             written.append(p)
+    if written:
+        sidecar_path = Path(out_dir) / "stage_b_latency.json"
+        L.write_sidecar(sidecar_path, latency_values, threads=latency_threads, sample_size=latency_sample)
+        print(f"[stage_b predict] wrote latency sidecar to {sidecar_path}")
     return written
 
 
@@ -566,6 +586,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--latency-sample", type=int, default=200,
                     help="rows to time individually at batch size 1 on CPU; rest get latency_ms=NaN")
+    p.add_argument("--latency-threads", type=int, default=1,
+                    help="torch thread count for the timed latency region; 1 mimics a single-core gate "
+                         "(README 5.4), matching the comparison table's protocol")
     p.add_argument("--device", default=None)
 
     return ap
@@ -586,7 +609,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "predict":
         predict(
             model_dir=args.model, splits=args.splits, data_dir=args.data_dir, out_dir=args.out_dir,
-            batch_size=args.batch_size, latency_sample=args.latency_sample, device=args.device,
+            batch_size=args.batch_size, latency_sample=args.latency_sample,
+            latency_threads=args.latency_threads, device=args.device,
         )
 
 

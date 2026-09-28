@@ -115,6 +115,20 @@ def test_run_function_matches_cli_schema(tmp_path):
         assert col in df.columns
 
 
+def test_run_writes_latency_sidecar(tmp_path):
+    out_csv = tmp_path / "preds_fn.csv"
+    n = len(pd.read_csv(FIXTURE))
+    K.run(str(FIXTURE), str(out_csv), latency_sample_n=3)
+    sidecar = tmp_path / "preds_fn_latency.json"
+    assert sidecar.exists()
+    payload = json.loads(sidecar.read_text())
+    assert payload["latency_protocol"] == {
+        "threads": 1, "batch": 1, "sample_size": 3, "includes_tokenization": True,
+    }
+    assert payload["n"] == min(3, n)
+    assert payload["p50_ms"] is not None and payload["p95_ms"] is not None
+
+
 # -------------------------------------------------------------- end-to-end -
 
 def test_end_to_end_report(tmp_path, fixture_df):

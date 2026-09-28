@@ -252,6 +252,29 @@ def test_predict_writes_valid_preds_and_logits(workspace):
         assert list(logits["id"]) == list(preds["id"])
 
 
+def test_predict_writes_latency_sidecar(workspace):
+    make_soft_targets(workspace["train_df"]).to_parquet(workspace["soft_targets"], index=False)
+    SA.train(train_path=workspace["train"], soft_targets_path=workspace["soft_targets"],
+             model_dir=workspace["model_dir"], embed_model="fake-test-model",
+             embedder=fake_embedder(), cache_dir=workspace["cache_dir"], C_grid=(0.1, 1.0, 10.0))
+
+    SA.predict(model_dir=workspace["model_dir"], splits=["val", "test"],
+               processed_dir=workspace["processed"], preds_dir=workspace["preds_dir"],
+               model_name="stage_a", embedder=fake_embedder(), cache_dir=workspace["cache_dir"],
+               latency_sample_n=4, latency_threads=1)
+
+    import json
+
+    sidecar = workspace["preds_dir"] / "stage_a_latency.json"
+    assert sidecar.exists()
+    payload = json.loads(sidecar.read_text())
+    assert payload["latency_protocol"] == {
+        "threads": 1, "batch": 1, "sample_size": 4, "includes_tokenization": True,
+    }
+    assert payload["n"] > 0
+    assert payload["p50_ms"] is not None and payload["p95_ms"] is not None
+
+
 def test_predict_skips_missing_and_gold_less_splits(workspace, tmp_path):
     make_soft_targets(workspace["train_df"]).to_parquet(workspace["soft_targets"], index=False)
     SA.train(train_path=workspace["train"], soft_targets_path=workspace["soft_targets"],
