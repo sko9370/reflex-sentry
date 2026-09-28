@@ -41,6 +41,10 @@ The first real build showed everyday words (vulnerable, breach, exploit, malicio
 
 The 800 sampled items (300 val, 300 test, 200 test_ood) were labeled in two independent Opus passes over differently ordered batches, merged with `python -m reflex_sentry.gold.draft_merge`, and all 30 pass disagreements were adjudicated. Five of sixteen labeling batches stopped partway when a safety classifier interrupted the labeler; those stops were not retried or worked around. Result: 717 of 800 items have at least one model label; 56 test items (36 or_bench, 20 wildguardmix) are unlabeled and need a human label, and 27 unlabeled hn_seed items were prefilled as benign. Pass A vs B agreement on doubly labeled items: val 0.93 (kappa 0.82), test 0.94 (kappa 0.81, n=55), test_ood 0.91 (kappa 0.73). The owner reviews every priority-1 row before ingest. The writeup must state that gold labels are model drafts with human review, not independent human labels, which weakens the "hand labels are the only independent check on teacher bias" argument.
 
+### 2026-09-28: gold review complete
+
+The owner reviewed all 800 items. Drafted labels (Opus two-pass plus adjudication) were accepted without change: val 300/300, test 278/278, test_ood 200/200. The owner hand-labeled 16 test items in the spreadsheet and reviewed 40 more that had only non-model suggestions (TF-IDF neighbors plus source label), accepting 34 and changing 6. The writeup should report this acceptance rate alongside the caveat that review of a draft is not the same as blind independent labeling (anchoring on the shown label is likely).
+
 ### 2026-09-27: data/ stays out of git
 
 Raw and processed data, gold labels, teacher scores, and model artifacts are never committed. `data/SOURCES.md` is the one exception (license and provenance notes per dataset), and `.gitignore` is written as `data/*` plus `!data/SOURCES.md` so that file can be tracked while everything else under `data/` stays ignored.
