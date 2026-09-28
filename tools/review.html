@@ -358,6 +358,23 @@
   #helpCard td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
   #helpCard td:first-child { font-family: ui-monospace, monospace; white-space: nowrap; }
   #liveRegion { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+
+  #toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--fg);
+    color: var(--bg);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 30;
+  }
+  #toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -419,7 +436,8 @@
       <textarea id="notesBox" placeholder="judgment call rationale (optional)"></textarea>
       <div class="nav-hints">
         1-4 select label &middot; q w e r t y u toggle tags &middot; Enter accept &amp; next &middot;
-        &larr;/Backspace previous &middot; &rarr; next (no commit) &middot; s skip &middot; Ctrl+Z undo &middot; ? help
+        &rarr; accept &amp; next (same as Enter) &middot; &larr;/Backspace previous (no commit) &middot;
+        s skip (not recorded) &middot; Ctrl+Z undo &middot; ? help
       </div>
     </div>
 
@@ -440,9 +458,9 @@
       <tr><td>4</td><td>label: out_of_scope</td></tr>
       <tr><td>q w e r t y u</td><td>toggle the 7 tag chips of the visible group, in order</td></tr>
       <tr><td>Enter</td><td>accept current selection (defaults to the recommendation) and go to next</td></tr>
+      <tr><td>&rarr;</td><td>same as Enter: accept current selection (defaults to the recommendation) and go to next</td></tr>
       <tr><td>Backspace / &larr;</td><td>previous item (no commit)</td></tr>
-      <tr><td>&rarr;</td><td>next item (no commit)</td></tr>
-      <tr><td>s</td><td>skip (next item, no commit)</td></tr>
+      <tr><td>s</td><td>explicit skip: go to next item without recording anything (counted in the top bar)</td></tr>
       <tr><td>Ctrl+Z</td><td>undo last commit</td></tr>
       <tr><td>Ctrl+S</td><td>export reviewed CSV</td></tr>
       <tr><td>?</td><td>toggle this help</td></tr>
@@ -452,6 +470,7 @@
 </div>
 
 <div id="liveRegion" aria-live="polite"></div>
+<div id="toast" role="status"></div>
 
 <script>
 'use strict';
@@ -628,7 +647,9 @@ var state = {
   hasPriority: false,
   ui: { selectedGold: '', selectedTags: [], notes: '', showFullText: false },
   undoStack: [],
-  storageKey: null
+  storageKey: null,
+  visited: {},         // ids the reviewer has landed on this session
+  skipCount: 0         // explicit "s" skips this session
 };
 
 function $(id) { return document.getElementById(id); }
@@ -749,6 +770,8 @@ function ingestCSVText(fileName, text) {
   state.order = order;
   state.pos = 0;
   state.undoStack = [];
+  state.visited = {};
+  state.skipCount = 0;
   state.hasQueueRank = rows.some(function (r) { return parseIntOrNull(r._queue_rank) !== null; });
   state.hasPriority = rows.some(function (r) { return priorityOf(r) !== null; });
   state.storageKey = LS ? storageKey(fileName, order) : null;
@@ -903,6 +926,7 @@ function loadUIFromCurrent() {
     state.ui.notes = '';
     return;
   }
+  state.visited[row.id] = true;
   var existingGold = (row.gold || '').trim();
   var useExisting = isReviewed(row) && isValidGold(existingGold);
   var gold = useExisting ? existingGold : recommendedGold(row);
@@ -1004,6 +1028,25 @@ function goPrev() {
   renderAll();
 }
 
+// Explicit skip: the reviewer chose not to record a judgment for this item.
+// Distinct from ArrowRight, which always commits. Counted so the top bar
+// can surface how many items were passed over unrecorded.
+function skipCurrent() {
+  var row = currentRow();
+  state.skipCount += 1;
+  showToast('Skipped (not recorded)');
+  announce('Skipped ' + (row ? row.id : '') + '. Not recorded.');
+  goNext();
+}
+
+// Rows the reviewer has landed on (in the current filtered queue) but that
+// still are not committed, i.e. skipped or otherwise left unreviewed.
+function uncommittedVisitedCount() {
+  return state.queue.filter(function (id) {
+    return state.visited[id] && !isReviewed(state.byId[id]);
+  }).length;
+}
+
 function undoLast() {
   var snap = state.undoStack.pop();
   if (!snap) { announce('Nothing to undo.'); return; }
@@ -1025,12 +1068,23 @@ function undoLast() {
 
 function announce(msg) { $('liveRegion').textContent = msg; }
 
+var toastTimer = null;
+function showToast(msg) {
+  var el = $('toast');
+  el.textContent = msg;
+  el.classList.add('visible');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('visible'); }, 1600);
+}
+
 /* ------------------------------------------------------------------- rendering */
 
 function renderTopbar() {
   var total = state.rows.length;
   var reviewed = state.rows.filter(isReviewed).length;
-  $('progressSummary').innerHTML = '<strong>' + reviewed + ' / ' + total + '</strong> reviewed';
+  var summary = '<strong>' + reviewed + ' / ' + total + '</strong> reviewed';
+  if (state.skipCount) summary += ' &middot; <strong>' + state.skipCount + '</strong> skipped (not recorded)';
+  $('progressSummary').innerHTML = summary;
 
   var html = '';
   if (state.hasQueueRank) {
@@ -1179,6 +1233,15 @@ function renderAll() {
 
 function exportCSV() {
   if (!state.rows.length) return;
+  var pending = uncommittedVisitedCount();
+  if (pending > 0) {
+    var noun = pending === 1 ? 'item was' : 'items were';
+    var ok = window.confirm(
+      pending + ' ' + noun + ' visited in the current filter but not recorded ' +
+      '(skipped or otherwise left unreviewed). Export anyway?'
+    );
+    if (!ok) return;
+  }
   var text = writeCSV(state.columns, state.rows);
   var blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
   var url = URL.createObjectURL(blob);
@@ -1218,9 +1281,9 @@ document.addEventListener('keydown', function (ev) {
   if (!state.rows.length) return;
 
   if (ev.key === 'Enter') { ev.preventDefault(); commitCurrent(); return; }
-  if (ev.key === 'ArrowRight') { ev.preventDefault(); goNext(); return; }
+  if (ev.key === 'ArrowRight') { ev.preventDefault(); commitCurrent(); return; }
   if (ev.key === 'ArrowLeft' || ev.key === 'Backspace') { ev.preventDefault(); goPrev(); return; }
-  if (ev.key.toLowerCase() === 's') { ev.preventDefault(); goNext(); return; }
+  if (ev.key.toLowerCase() === 's') { ev.preventDefault(); skipCurrent(); return; }
   if (['1', '2', '3', '4'].indexOf(ev.key) !== -1) {
     ev.preventDefault();
     selectGold(GOLD_LABELS[parseInt(ev.key, 10) - 1].id);

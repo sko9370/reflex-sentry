@@ -124,3 +124,64 @@ def test_review_flow_smoke(tmp_path):
 
     r004 = next(r for r in rows if r["id"] == "r004")
     assert r004["gold"] == "benign"
+
+
+@pytest.mark.skipif(not _PLAYWRIGHT_OK, reason="playwright + a Chromium binary are not available")
+def test_right_arrow_commits_as_accepted():
+    """Right arrow is a usability trap fix: it must commit the current item
+    (same as Enter), not silently advance past it unreviewed."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=_CHROMIUM_PATH, headless=True)
+        page = browser.new_page()
+        page.goto(REVIEW_HTML.as_uri())
+
+        page.set_input_files("#fileInput", str(FIXTURE_CSV))
+        page.wait_for_selector("#itemContainer.visible")
+        page.click("#promptText")
+
+        first_id = page.evaluate("window.state.queue[window.state.pos]")
+        page.keyboard.press("ArrowRight")
+
+        row = page.evaluate("(id) => window.state.byId[id]", first_id)
+        assert row["_reviewed"] == "1"
+        assert row["_review_action"] == "accepted"
+
+        # The queue advanced past the now-committed item.
+        assert page.evaluate("window.state.queue[window.state.pos]") != first_id
+        # Right arrow does not count as a skip.
+        assert page.evaluate("window.state.skipCount") == 0
+
+        browser.close()
+
+
+@pytest.mark.skipif(not _PLAYWRIGHT_OK, reason="playwright + a Chromium binary are not available")
+def test_skip_key_does_not_commit():
+    """'s' must remain a real skip: no row mutation, but it is surfaced via
+    a toast and counted in the top bar so it can't be mistaken for silence."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=_CHROMIUM_PATH, headless=True)
+        page = browser.new_page()
+        page.goto(REVIEW_HTML.as_uri())
+
+        page.set_input_files("#fileInput", str(FIXTURE_CSV))
+        page.wait_for_selector("#itemContainer.visible")
+        page.click("#promptText")
+
+        first_id = page.evaluate("window.state.queue[window.state.pos]")
+        page.keyboard.press("s")
+
+        row = page.evaluate("(id) => window.state.byId[id]", first_id)
+        assert row["_reviewed"] in ("", None)
+        assert row["_review_action"] in ("", None)
+
+        # The queue still advanced, but the skip is recorded as a skip, not
+        # as a review, and is visible to the reviewer.
+        assert page.evaluate("window.state.queue[window.state.pos]") != first_id
+        assert page.evaluate("window.state.skipCount") == 1
+        assert page.inner_text("#toast") == "Skipped (not recorded)"
+
+        browser.close()
