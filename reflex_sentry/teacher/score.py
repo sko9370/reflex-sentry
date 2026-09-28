@@ -181,7 +181,9 @@ def parse_qwen_guard_category(continuation: str, preset: dict) -> str:
     idx = continuation.find(prefix)
     if idx == -1:
         return ""
-    return continuation[idx + len(prefix):].strip().splitlines()[0].strip() if continuation[idx + len(prefix):].strip() else ""
+    rest = continuation[idx + len(prefix):].strip()
+    first = rest.splitlines()[0].strip() if rest else ""
+    return "" if first.lower() == "none" else first
 
 
 # ---------------------------------------------------------------------------

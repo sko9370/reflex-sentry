@@ -337,3 +337,10 @@ def test_truncate_user_texts_cuts_prompt_before_templating():
     out = truncate_user_texts(WordTok(), ["short prompt", long_text], max_tokens=512)
     assert out[0] == "short prompt"
     assert out[1].split() == [f"w{i}" for i in range(512)]
+
+
+def test_qwen_category_none_is_empty():
+    from reflex_sentry.teacher.score import PRESETS, parse_qwen_guard_category
+
+    preset = PRESETS["qwen3guard_gen_8b"]
+    assert parse_qwen_guard_category("Safe\nCategories: None", preset) == ""
