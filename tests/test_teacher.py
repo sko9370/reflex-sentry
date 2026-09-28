@@ -321,3 +321,19 @@ def test_as_predictor_run_rejects_wrong_number_of_score_files(tmp_path):
     pd.DataFrame({"id": ["e:1"], "gold": ["benign"]}).to_parquet(eval_path)
     with pytest.raises(ValueError, match="1 or 2"):
         as_predictor.run([], str(eval_path), str(tmp_path / "out.csv"))
+
+
+def test_truncate_user_texts_cuts_prompt_before_templating():
+    from reflex_sentry.teacher.score import truncate_user_texts
+
+    class WordTok:
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": text.split()}
+
+        def decode(self, ids):
+            return " ".join(ids)
+
+    long_text = " ".join(f"w{i}" for i in range(600))
+    out = truncate_user_texts(WordTok(), ["short prompt", long_text], max_tokens=512)
+    assert out[0] == "short prompt"
+    assert out[1].split() == [f"w{i}" for i in range(512)]

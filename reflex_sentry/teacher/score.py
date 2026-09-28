@@ -224,6 +224,24 @@ def load_model_and_tokenizer(preset: dict, load_in_4bit: bool = False, device_ma
     return model, tokenizer
 
 
+def truncate_user_texts(tokenizer, texts: list[str], max_tokens: int) -> list[str]:
+    """Cut each user prompt to its first `max_tokens` tokens BEFORE templating.
+
+    Truncating the templated string instead would cut its tail, which holds
+    the assistant header where the verdict is read.
+    """
+    out = []
+    for t in texts:
+        ids = tokenizer(t, add_special_tokens=False)["input_ids"]
+        out.append(tokenizer.decode(ids[:max_tokens]) if len(ids) > max_tokens else t)
+    return out
+
+
+def _to_model_device(enc, model):
+    device = getattr(model, "device", None)
+    return {k: v.to(device) for k, v in enc.items()} if device is not None else enc
+
+
 def _chat_prompt_strings(tokenizer, texts: list[str]) -> list[str]:
     return [
         tokenizer.apply_chat_template(
@@ -248,19 +266,19 @@ def make_llama_guard_score_fn(
     prefix_str = tokenizer.decode(prefix_ids) if prefix_ids else ""
 
     def score_fn(texts: list[str]) -> list[dict]:
+        texts = truncate_user_texts(tokenizer, texts, max_length)
         prompts = [p + prefix_str for p in _chat_prompt_strings(tokenizer, texts)]
-        enc = tokenizer(
-            prompts, return_tensors="pt", padding=True, truncation=True,
-            max_length=max_length, add_special_tokens=False,
-        )
+        enc = _to_model_device(tokenizer(
+            prompts, return_tensors="pt", padding=True, add_special_tokens=False,
+        ), model)
         with torch.no_grad():
             out = model(**enc)
         last_logits = out.logits[:, -1, :].float().cpu().numpy()
 
-        gen_enc = tokenizer(
+        gen_enc = _to_model_device(tokenizer(
             _chat_prompt_strings(tokenizer, texts), return_tensors="pt", padding=True,
-            truncation=True, max_length=max_length,
-        )
+            add_special_tokens=False,
+        ), model)
         with torch.no_grad():
             gen = model.generate(
                 **gen_enc, max_new_tokens=preset["category_max_new_tokens"], do_sample=False
@@ -275,6 +293,7 @@ def make_llama_guard_score_fn(
                 "p_unsafe_teacher": p_unsafe,
                 "p_controversial": np.nan,
                 "teacher_category": parse_llama_guard_category(continuations[i], preset),
+                "teacher_raw": continuations[i].strip()[:60],
             })
         return rows
 
@@ -295,11 +314,11 @@ def make_qwen_guard_score_fn(
     )
 
     def score_fn(texts: list[str]) -> list[dict]:
+        texts = truncate_user_texts(tokenizer, texts, max_length)
         prompts = [p + preset["prefill_text"] for p in _chat_prompt_strings(tokenizer, texts)]
-        enc = tokenizer(
-            prompts, return_tensors="pt", padding=True, truncation=True,
-            max_length=max_length, add_special_tokens=False,
-        )
+        enc = _to_model_device(tokenizer(
+            prompts, return_tensors="pt", padding=True, add_special_tokens=False,
+        ), model)
         with torch.no_grad():
             out = model(**enc)
         last_logits = out.logits[:, -1, :].float().cpu().numpy()
@@ -318,6 +337,7 @@ def make_qwen_guard_score_fn(
                 "p_unsafe_teacher": p_unsafe,
                 "p_controversial": p_ctrl,
                 "teacher_category": parse_qwen_guard_category(continuations[i], preset),
+                "teacher_raw": continuations[i].strip()[:60],
             })
         return rows
 
