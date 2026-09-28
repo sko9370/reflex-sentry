@@ -344,3 +344,19 @@ def test_qwen_category_none_is_empty():
 
     preset = PRESETS["qwen3guard_gen_8b"]
     assert parse_qwen_guard_category("Safe\nCategories: None", preset) == ""
+
+
+def test_run_scorer_persists_teacher_raw(tmp_path):
+    import pandas as pd
+    from reflex_sentry.teacher.score import run_scorer
+
+    inp = tmp_path / "in.parquet"
+    pd.DataFrame({"id": ["a", "b", "c"], "text": ["x", "y", "z"]}).to_parquet(inp)
+
+    def fake(texts):
+        return [{"p_unsafe_teacher": 0.1, "teacher_category": "", "teacher_raw": "safe"} for _ in texts]
+
+    out = tmp_path / "out.parquet"
+    run_scorer(fake, [str(inp)], str(out), "fake", batch_size=2, checkpoint_every=1)
+    df = pd.read_parquet(out)
+    assert len(df) == 3 and (df["teacher_raw"] == "safe").all()

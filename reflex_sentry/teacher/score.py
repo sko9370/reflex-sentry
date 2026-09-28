@@ -405,7 +405,7 @@ def run_scorer(
         done = pd.read_parquet(out_file)
         todo = todo[~todo["id"].isin(set(done["id"]))].reset_index(drop=True)
     else:
-        done = pd.DataFrame(columns=["id", "p_unsafe_teacher", "p_controversial", "teacher_category", "teacher_model"])
+        done = None
 
     new_rows: list[dict] = []
 
@@ -414,7 +414,7 @@ def run_scorer(
         if not new_rows:
             return
         chunk = pd.DataFrame(new_rows)
-        done = pd.concat([done, chunk], ignore_index=True)
+        done = chunk if done is None or done.empty else pd.concat([done, chunk], ignore_index=True)
         out_file.parent.mkdir(parents=True, exist_ok=True)
         done.to_parquet(out_file, index=False)
 
@@ -428,6 +428,7 @@ def run_scorer(
                 "p_unsafe_teacher": s["p_unsafe_teacher"],
                 "p_controversial": s.get("p_controversial", np.nan),
                 "teacher_category": s.get("teacher_category", ""),
+                "teacher_raw": s.get("teacher_raw", ""),
                 "teacher_model": teacher_model,
             })
         n_batches += 1
@@ -435,6 +436,9 @@ def run_scorer(
             _flush()
             new_rows = []
     _flush()
+    if done is None:
+        done = pd.DataFrame(columns=["id", "p_unsafe_teacher", "p_controversial",
+                                     "teacher_category", "teacher_raw", "teacher_model"])
     return done
 
 
