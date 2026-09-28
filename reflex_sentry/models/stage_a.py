@@ -296,6 +296,13 @@ def train(train_path: str | Path = DEFAULT_TRAIN_PATH,
     # the deployed model's size (README 5.4 "Params").
     embed_params = 0
     st = _ST_MODEL_CACHE.get(embed_model)
+    if st is None and embedder is None:
+        # Embeddings may have come from the on-disk cache, so the model was
+        # never loaded; load it now only to count its parameters.
+        try:
+            st = _load_sentence_transformer(embed_model)
+        except Exception as e:  # e.g. offline with no local copy
+            print(f"stage_a: could not load {embed_model} to count params ({e})")
     if st is not None:
         embed_params = int(sum(p.numel() for p in st.parameters()))
     n_params = head_params + embed_params
