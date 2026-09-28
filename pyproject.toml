@@ -30,6 +30,13 @@ stage_b = [
     "datasets",
     "optimum[onnxruntime]",
     "onnxruntime",
+    "onnx",
+]
+teacher = [
+    "torch",
+    "transformers>=4.48",
+    "accelerate",
+    "bitsandbytes",
 ]
 
 [tool.setuptools.packages.find]
