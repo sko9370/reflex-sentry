@@ -59,6 +59,7 @@ python3 -m reflex_sentry.models.export_onnx sweep \
     echo "         Skipping int8; the fp32 stage_b row is still produced." >&2
     # Remove stale int8 artifacts so an old model cannot leak into the table.
     rm -f "$INT8_PATH" "$PREDS_DIR"/stage_b_int8_*_logits.csv "$PREDS_DIR"/stage_b_int8_*.csv
+    rm -rf reports/stage_b_int8_*
 }
 
 if [ "$INT8_OK" = 1 ]; then
