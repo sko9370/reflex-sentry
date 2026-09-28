@@ -15,6 +15,9 @@ pip install -e ".[stage_a]"
 echo "== training the Stage A baseline (frozen embeddings + logistic regression) =="
 python -m reflex_sentry.models.stage_a train
 
+echo "== building the evasion-wrapped test set if test.parquet exists =="
+python3 -c "from pathlib import Path; from reflex_sentry.eval.run_all import ensure_test_evasion; ensure_test_evasion(Path('data/processed'))"
+
 echo "== scoring Stage A on every available split =="
 python -m reflex_sentry.models.stage_a predict --splits val test test_ood test_evasion
 

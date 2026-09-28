@@ -51,6 +51,9 @@ python3 -m reflex_sentry.models.export_onnx parity \
     --model "$MODEL_DIR" --onnx "$ONNX_PATH" --int8 "$INT8_PATH" \
     --val "$VAL_PARQUET" --target-recall "$TARGET_RECALL"
 
+echo "== building the evasion-wrapped test set if test.parquet exists =="
+python3 -c "from pathlib import Path; from reflex_sentry.eval.run_all import ensure_test_evasion; ensure_test_evasion(Path('data/processed'))"
+
 echo "== int8 CPU predict on: $SPLITS =="
 # shellcheck disable=SC2086
 python3 -m reflex_sentry.models.export_onnx predict \

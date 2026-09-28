@@ -291,7 +291,14 @@ def train(train_path: str | Path = DEFAULT_TRAIN_PATH,
     model_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(final, model_dir / "model.joblib")
 
-    n_params = int(final.coef_.size + final.intercept_.size)
+    head_params = int(final.coef_.size + final.intercept_.size)
+    # Count the frozen embedder too: it runs at inference, so it is part of
+    # the deployed model's size (README 5.4 "Params").
+    embed_params = 0
+    st = _ST_MODEL_CACHE.get(embed_model)
+    if st is not None:
+        embed_params = int(sum(p.numel() for p in st.parameters()))
+    n_params = head_params + embed_params
     metadata = {
         "embedding_model": embed_model,
         "embedding_dim": int(X.shape[1]) if X.size else 0,
@@ -306,6 +313,8 @@ def train(train_path: str | Path = DEFAULT_TRAIN_PATH,
         "class_weight": class_weight,
         "classes": CLASSES,
         "params": n_params,
+        "head_params": head_params,
+        "embedding_params": embed_params,
         "random_state": random_state,
     }
     (model_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
