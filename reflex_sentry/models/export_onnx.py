@@ -1,13 +1,16 @@
 """Export the Stage B student to ONNX, int8-quantize it, check parity, and
 predict with an onnxruntime CPU session.
 
-Pipeline (README 4.5): export fp32 ONNX -> dynamic int8 quantization ->
-confirm the quantized model makes the same escalate/pass decisions as fp32 on
-val -> only then run on the test sets.
+Pipeline (README 4.5): export fp32 ONNX -> dynamic int8 quantization -> pick
+a quantization config on the training dev fold (the same held-out rows used
+for Stage B checkpoint selection, README 4.1: val is reserved for temperature
+scaling and threshold selection, never for choosing a model config) at a
+matched escalation rate -> only then run on val/test sets. `parity` on val is
+kept as an informational-only report; it never gates anything.
 
     python -m reflex_sentry.models.export_onnx export   --model models/stage_b
     python -m reflex_sentry.models.export_onnx quantize --onnx models/stage_b/model.onnx [--preset legacy]
-    python -m reflex_sentry.models.export_onnx sweep    --model models/stage_b --onnx models/stage_b/model.onnx --val data/processed/val.parquet --choose
+    python -m reflex_sentry.models.export_onnx sweep    --model models/stage_b --onnx models/stage_b/model.onnx --train-parquet data/processed/train.parquet --targets-parquet data/interim/soft_targets.parquet --choose
     python -m reflex_sentry.models.export_onnx parity   --model models/stage_b --onnx ... --int8 ... --val data/processed/val.parquet
     python -m reflex_sentry.models.export_onnx predict  --model models/stage_b --int8 ... --splits val test test_ood test_evasion
 
@@ -30,7 +33,6 @@ import random
 import shutil
 import tempfile
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,11 +57,12 @@ try:  # pragma: no cover
 except ImportError:  # pragma: no cover
     ort = None
 
-# Parity warning rule (README 4.5: "match the fp32 model within noise"). The
-# recall tolerance is max(1 item, MAX_RECALL_DIFF): on ~48 dangerous val rows a
-# single item is 2.1 points, which is the resolution of the measurement.
-MIN_DECISION_AGREEMENT = 0.97
-MAX_RECALL_DIFF = 0.02
+# int8 config selection pass rule (README 4.5), evaluated on the training dev
+# fold at a matched escalation rate (label-free -- see `matched_rate_metrics`):
+# int8's threshold is chosen to reproduce fp32's escalation rate rather than
+# reusing fp32's threshold, because int8 shifts logits and fp32's threshold
+# does not transfer.
+MIN_MATCHED_AGREEMENT = 0.97
 MAX_AP_DROP = 0.01
 
 
@@ -361,20 +364,26 @@ def _ranking(gold: np.ndarray, p_safe: np.ndarray) -> tuple[float, float]:
 
 
 def parity_metrics(gold: np.ndarray, torch_logits: np.ndarray, onnx_fp32_logits: np.ndarray,
-                    int8_logits: np.ndarray, t: float,
-                    min_decision_agreement: float = MIN_DECISION_AGREEMENT,
-                    max_recall_diff: float = MAX_RECALL_DIFF, max_ap_drop: float = MAX_AP_DROP) -> dict:
-    """Pure-numpy fp32 (torch) vs int8 (onnx) comparison on val. The decision
-    that matters is the gate's: escalate iff p_safe < t (softmax of logits).
-    Ambiguous rows count in decision agreement but not in recall, benign
-    escalation, or ranking quality."""
+                    int8_logits: np.ndarray, t_fp32: float, t_int8: float | None = None) -> dict:
+    """Informational only -- never gates anything. fp32 and int8 are each
+    evaluated at their OWN threshold (`t_fp32`, `t_int8`): in deployment each
+    variant is calibrated separately on val (`reflex_sentry.eval.run_all`
+    fits temperature and threshold per model), so comparing decisions at a
+    single shared threshold is the wrong criterion -- int8 shifts logits and
+    fp32's threshold does not transfer. `t_int8` defaults to `t_fp32` when not
+    given. Ambiguous rows count in decision agreement but not in recall,
+    benign escalation, or ranking quality. int8 config selection itself
+    happens on the training dev fold at a matched escalation rate; see
+    `matched_rate_metrics` / `export_onnx sweep`."""
+    if t_int8 is None:
+        t_int8 = t_fp32
     gold = np.asarray(gold)
     dangerous, benign = gold == "dangerous", gold == "benign"
     n_d, n_b = int(dangerous.sum()), int(benign.sum())
 
     p_fp32 = SB._softmax(torch_logits)[:, 0]
     p_int8 = SB._softmax(int8_logits)[:, 0]
-    esc_fp32, esc_int8 = p_fp32 < t, p_int8 < t
+    esc_fp32, esc_int8 = p_fp32 < t_fp32, p_int8 < t_int8
     same = esc_fp32 == esc_int8
 
     def side(esc: np.ndarray, p_safe: np.ndarray) -> dict:
@@ -394,7 +403,6 @@ def parity_metrics(gold: np.ndarray, torch_logits: np.ndarray, onnx_fp32_logits:
         }
 
     recall_items = int8["recall"]["k"] - fp32["recall"]["k"]
-    recall_diff = abs(recall_items) / n_d if n_d else float("nan")
     diff = {
         "recall_items": recall_items,
         "recall": (int8["recall"]["rate"] - fp32["recall"]["rate"]) if n_d else float("nan"),
@@ -403,19 +411,9 @@ def parity_metrics(gold: np.ndarray, torch_logits: np.ndarray, onnx_fp32_logits:
         "roc_auc": int8["roc_auc"] - fp32["roc_auc"],
     }
     agreement = float(same.mean()) if same.size else float("nan")
-    recall_tol = max(1.0 / n_d, max_recall_diff) if n_d else float("nan")
-
-    warns: list[str] = []
-    if same.size and agreement < min_decision_agreement:
-        warns.append(f"decision agreement {agreement:.4f} < {min_decision_agreement:.2f}")
-    if n_d and recall_diff > recall_tol + 1e-12:
-        warns.append(f"recall differs by {abs(recall_items)} item(s) ({recall_diff:.4f}) "
-                     f"> max(1 item, {max_recall_diff:.2f}) = {recall_tol:.4f}")
-    if not math.isnan(diff["average_precision"]) and diff["average_precision"] < -max_ap_drop - 1e-12:
-        warns.append(f"average precision dropped by {-diff['average_precision']:.4f} > {max_ap_drop:.2f}")
 
     return {
-        "threshold": float(t),
+        "threshold_fp32": float(t_fp32), "threshold_int8": float(t_int8),
         "n_rows": int(gold.size), "n_dangerous": n_d, "n_benign": n_b,
         "n_ambiguous": int((gold == "ambiguous").sum()),
         "decision_agreement": {
@@ -426,10 +424,7 @@ def parity_metrics(gold: np.ndarray, torch_logits: np.ndarray, onnx_fp32_logits:
         "fp32": fp32, "int8": int8, "diff": diff,
         "torch_vs_onnx_fp32": logit_diag(torch_logits, onnx_fp32_logits),
         "torch_vs_onnx_int8": logit_diag(torch_logits, int8_logits),
-        "warn_rule": {"min_decision_agreement": min_decision_agreement,
-                      "max_recall_diff": max_recall_diff, "max_ap_drop": max_ap_drop},
-        "warnings": warns,
-        "ok": not warns,
+        "informational": True,
     }
 
 
@@ -442,7 +437,8 @@ def format_parity_table(m: dict) -> str:
     da = m["decision_agreement"]
     rows = [
         ("metric", "fp32", "int8", "int8-fp32"),
-        (f"recall @ t={m['threshold']:.4f}", _fmt_rate(fp["recall"]), _fmt_rate(i8["recall"]),
+        (f"recall @ own t (fp32={m['threshold_fp32']:.4f}, int8={m['threshold_int8']:.4f})",
+         _fmt_rate(fp["recall"]), _fmt_rate(i8["recall"]),
          f"{d['recall_items']:+d} item(s)"),
         ("benign escalation", _fmt_rate(fp["benign_escalation"]), _fmt_rate(i8["benign_escalation"]),
          f"{d['benign_escalation_items']:+d} item(s)"),
@@ -459,24 +455,11 @@ def format_parity_table(m: dict) -> str:
     return "\n".join("  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip() for r in rows)
 
 
-def _print_banner(warns: list[str]) -> None:
-    banner = (
-        "!" * 70 + "\n"
-        "WARNING: int8 model differs from fp32 beyond noise on val:\n  - "
-        + "\n  - ".join(warns) + "\n"
-        "Do not trust int8 test-set numbers until this is investigated "
-        "(README 4.5: confirm the quantized model matches fp32 within noise).\n"
-        + "!" * 70
-    )
-    print(banner)
-    warnings.warn(banner, stacklevel=3)
-
-
 def load_reference(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
                     batch_size: int = 32, bulk_threads: int = 0) -> dict:
-    """Everything the int8 comparison needs that does not depend on the int8
-    model: val rows, torch fp32 logits and fp32 ONNX logits. ONNX logits use
-    a bulk session (`bulk_threads`, 0 = all cores); latency is measured
+    """Everything the val parity report needs that does not depend on the
+    int8 model: val rows, torch fp32 logits and fp32 ONNX logits. ONNX logits
+    use a bulk session (`bulk_threads`, 0 = all cores); latency is measured
     elsewhere, in its own 1-thread session."""
     _require_onnx()
     _require_ort()
@@ -503,16 +486,30 @@ def reference_threshold(ref: dict, target_recall: float) -> float:
     return float(M.select_threshold(pred_df, target_recall))
 
 
+PARITY_NOTE = (
+    "informational only: val is reserved for temperature scaling and threshold selection "
+    "(README 4.1), so this report never gates int8 config selection -- that happens on the "
+    "training dev fold at a matched escalation rate (see `export_onnx sweep`). fp32 and int8 "
+    "are each scored here at their OWN val-calibrated threshold, matching how "
+    "reflex_sentry.eval.run_all actually calibrates each variant, not a single threshold shared "
+    "between them."
+)
+
+
 def parity_check(model_dir: str | Path, onnx_path: str | Path, int8_path: str | Path,
                   val_parquet: str | Path, target_recall: float = 0.95, batch_size: int = 32,
-                  min_decision_agreement: float = MIN_DECISION_AGREEMENT,
-                  max_recall_diff: float = MAX_RECALL_DIFF, max_ap_drop: float = MAX_AP_DROP,
                   out_path: str | Path | None = None, reference: dict | None = None,
                   bulk_threads: int = 0) -> dict:
-    """Compare fp32 torch / fp32 onnx / int8 onnx on val at the gate's decision
-    (escalate iff p_safe < t, t chosen on fp32 for `target_recall`). Prints a
-    compact table, warns loudly per the warning rule, and writes the metrics
-    to `out_path` (default <model_dir>/parity.json)."""
+    """Informational val parity report ONLY -- it never gates anything (int8
+    config selection happens on the training dev fold; see `export_onnx
+    sweep` / `matched_rate_metrics`). fp32 and int8 are each scored at their
+    own val-calibrated threshold (`reference_threshold` for fp32,
+    `select_threshold` on int8's own p_safe for int8), not a shared
+    threshold, since in deployment each variant is calibrated separately.
+    Prints a compact table and writes the metrics to `out_path` (default
+    <model_dir>/parity.json)."""
+    from reflex_sentry.eval import metrics as M
+
     t_start = time.perf_counter()
     ref = reference or load_reference(model_dir, onnx_path, val_parquet, batch_size=batch_size,
                                       bulk_threads=bulk_threads)
@@ -520,19 +517,18 @@ def parity_check(model_dir: str | Path, onnx_path: str | Path, int8_path: str | 
                                batch_size=batch_size)
     print(f"[parity] scored {len(ref['texts'])} val rows in {time.perf_counter() - t_start:.1f}s "
           f"(bulk, intra_op_num_threads={bulk_threads})")
-    t = reference_threshold(ref, target_recall)
-    result = parity_metrics(ref["gold"], ref["torch_logits"], ref["onnx_fp32_logits"], int8_logits, t,
-                            min_decision_agreement, max_recall_diff, max_ap_drop)
+    t_fp32 = reference_threshold(ref, target_recall)
+    int8_pred_df = pd.DataFrame({"gold": ref["gold"], "p_safe": SB._softmax(int8_logits)[:, 0]})
+    t_int8 = float(M.select_threshold(int8_pred_df, target_recall))
+    result = parity_metrics(ref["gold"], ref["torch_logits"], ref["onnx_fp32_logits"], int8_logits, t_fp32, t_int8)
     result["target_recall"] = target_recall
     result["int8_path"] = str(int8_path)
+    result["note"] = PARITY_NOTE
 
+    print(f"[parity] {PARITY_NOTE}")
     print(f"[parity] val: {result['n_rows']} rows ({result['n_dangerous']} dangerous, "
           f"{result['n_benign']} benign, {result['n_ambiguous']} ambiguous); int8 = {int8_path}")
     print(format_parity_table(result))
-    if result["warnings"]:
-        _print_banner(result["warnings"])
-    else:
-        print("[parity] OK: int8 within noise of fp32 per the warning rule")
 
     out_path = Path(out_path) if out_path is not None else Path(model_dir) / "parity.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -556,37 +552,140 @@ def _latency_stats(onnx_path: str | Path, ref: dict, sample_size: int = 200, war
             "n": int(lat.size)}
 
 
+def dev_fold_reference(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Path,
+                        targets_parquet: str | Path, dev_ratio: float | None = None,
+                        seed: int | None = None, batch_size: int = 32, bulk_threads: int = 0) -> dict:
+    """The internal dev fold used for int8 config selection: the same
+    held-out rows used for Stage B checkpoint selection (`stage_b.
+    make_dev_split`, reusing metadata.json's `seed`/`dev_ratio` unless
+    overridden), never `val` (README 4.1: val is reserved for temperature
+    scaling and threshold selection). Labels are the soft-target argmax
+    (dangerous vs benign); rows whose argmax is `unsure` are dropped, since
+    they are not part of the dangerous/benign ranking task."""
+    _require_onnx()
+    _require_ort()
+    student, tokenizer, metadata = SB.load_student(model_dir, device="cpu")
+    max_len = int(metadata.get("max_len", 256))
+    dev_ratio = metadata.get("dev_ratio", 0.1) if dev_ratio is None else dev_ratio
+    seed = metadata.get("seed", 13) if seed is None else seed
+
+    frame = SB.load_training_frame(train_parquet, targets_parquet)
+    _, dev_df = SB.make_dev_split(frame, dev_ratio=dev_ratio, seed=seed)
+    argmax = dev_df[list(SB.TARGET_COLS)].to_numpy().argmax(axis=1)
+    label_map = {0: "benign", 1: "dangerous", 2: "ambiguous"}
+    gold_all = np.array([label_map[a] for a in argmax])
+    keep = gold_all != "ambiguous"
+    n_dropped = int((~keep).sum())
+    dev_df = dev_df.loc[keep].reset_index(drop=True)
+    gold = gold_all[keep]
+
+    texts = dev_df["text"].tolist()
+    torch_logits = SB.infer_logits(student, tokenizer, texts, max_len, "cpu", batch_size=batch_size)
+    onnx_fp32_logits = _ort_logits(_ort_session(onnx_path, intra_op_num_threads=bulk_threads), tokenizer, texts,
+                                    max_len, batch_size=batch_size)
+    return {"tokenizer": tokenizer, "max_len": max_len, "texts": texts, "gold": gold,
+            "torch_logits": torch_logits, "onnx_fp32_logits": onnx_fp32_logits, "batch_size": batch_size,
+            "bulk_threads": bulk_threads, "dev_ratio": dev_ratio, "seed": seed,
+            "n_dev_rows": len(dev_df), "n_dropped_unsure": n_dropped}
+
+
+def matched_rate_threshold(p_safe_int8: np.ndarray, k: int) -> float:
+    """The int8 threshold that makes it escalate the same COUNT of rows (the
+    k lowest-p_safe rows) as fp32 escalated -- label-free, so it reproduces
+    fp32's escalation rate without assuming fp32's threshold transfers to
+    int8's shifted logits."""
+    n = int(p_safe_int8.size)
+    if n == 0:
+        return 0.0
+    if k <= 0:
+        return float(np.nextafter(p_safe_int8.min(), -np.inf))
+    if k >= n:
+        return float(np.nextafter(p_safe_int8.max(), np.inf))
+    order = np.sort(p_safe_int8)
+    return float(np.nextafter(order[k - 1], np.inf))
+
+
+def matched_rate_metrics(gold: np.ndarray, torch_logits: np.ndarray, int8_logits: np.ndarray,
+                          target_recall: float = 0.95, min_agreement: float = MIN_MATCHED_AGREEMENT,
+                          max_ap_drop: float = MAX_AP_DROP) -> dict:
+    """Label-free, matched-escalation-rate comparison of fp32 vs int8 on the
+    dev fold. `t_fp32` is chosen on dev argmax labels for `target_recall`;
+    int8 gets its OWN threshold (`matched_rate_threshold`) that reproduces
+    fp32's escalation count at `t_fp32`, rather than reusing `t_fp32` itself
+    (int8 shifts logits, so fp32's threshold does not transfer). Pass rule:
+    matched-rate decision agreement >= `min_agreement` and average precision
+    does not drop by more than `max_ap_drop`."""
+    from reflex_sentry.eval import metrics as M
+
+    gold = np.asarray(gold)
+    p_fp32 = SB._softmax(torch_logits)[:, 0]
+    p_int8 = SB._softmax(int8_logits)[:, 0]
+    n = int(p_fp32.size)
+
+    t_fp32 = float(M.select_threshold(pd.DataFrame({"gold": gold, "p_safe": p_fp32}), target_recall))
+    esc_fp32 = p_fp32 < t_fp32
+    k = int(esc_fp32.sum())
+    t_int8 = matched_rate_threshold(p_int8, k)
+    esc_int8 = p_int8 < t_int8
+
+    same = esc_fp32 == esc_int8
+    agreement = float(same.mean()) if n else float("nan")
+
+    ap_fp32, auc_fp32 = _ranking(gold, p_fp32)
+    ap_int8, auc_int8 = _ranking(gold, p_int8)
+    diff_ap = ap_int8 - ap_fp32
+    diff_auc = auc_int8 - auc_fp32
+    max_abs_diff = float(np.max(np.abs(torch_logits - int8_logits))) if n else 0.0
+
+    warns: list[str] = []
+    if n and agreement < min_agreement:
+        warns.append(f"matched-rate decision agreement {agreement:.4f} < {min_agreement:.2f}")
+    if not math.isnan(diff_ap) and diff_ap < -max_ap_drop - 1e-12:
+        warns.append(f"average precision dropped by {-diff_ap:.4f} > {max_ap_drop:.2f}")
+
+    return {
+        "n_rows": n, "target_recall": target_recall,
+        "threshold_fp32": t_fp32, "threshold_int8": t_int8,
+        "escalation_count_fp32": k, "escalation_count_int8": int(esc_int8.sum()),
+        "escalation_rate_fp32": (k / n) if n else float("nan"),
+        "escalation_rate_int8": (int(esc_int8.sum()) / n) if n else float("nan"),
+        "decision_agreement": agreement,
+        "average_precision": {"fp32": ap_fp32, "int8": ap_int8, "diff": diff_ap},
+        "roc_auc": {"fp32": auc_fp32, "int8": auc_int8, "diff": diff_auc},
+        "max_abs_logit_diff": max_abs_diff,
+        "pass_rule": {"min_matched_agreement": min_agreement, "max_ap_drop": max_ap_drop},
+        "warnings": warns,
+        "ok": not warns,
+    }
+
+
 def choose_best(results: list[dict]) -> dict | None:
-    """Highest overall decision agreement among configs that pass the warning
-    rule; ties broken by lower p50 latency."""
-    passing = [r for r in results if r["parity"]["ok"]]
+    """Highest matched-rate decision agreement among configs that pass the
+    pass rule; ties broken by lower p50 latency."""
+    passing = [r for r in results if r["metrics"]["ok"]]
     if not passing:
         return None
-    return min(passing, key=lambda r: (-r["parity"]["decision_agreement"]["overall"], r["latency"]["p50_ms"]))
+    return min(passing, key=lambda r: (-r["metrics"]["decision_agreement"], r["latency"]["p50_ms"]))
 
 
 def format_sweep_table(fp32_row: dict, results: list[dict], chosen: str | None = None,
                         markdown: bool = False) -> str:
-    header = ["config", "agree", "agree(dang)", "recall", "benign esc", "dAP", "dAUC",
+    header = ["config", "agree(matched)", "esc rate fp32", "esc rate int8", "dAP", "dAUC",
               "max|dlogit|", "p50 ms", "p95 ms", "MB", "ok"]
 
     def row(name: str, r: dict) -> list[str]:
-        m = r["parity"]
+        m = r["metrics"]
         return [
             name + (" *" if name == chosen else ""),
-            f"{m['decision_agreement']['overall']:.4f}", f"{m['decision_agreement']['dangerous']:.4f}",
-            _fmt_rate(m["int8"]["recall"]).split()[0], _fmt_rate(m["int8"]["benign_escalation"]).split()[0],
-            f"{m['diff']['average_precision']:+.4f}", f"{m['diff']['roc_auc']:+.4f}",
-            f"{m['torch_vs_onnx_int8']['max_abs_diff']:.3f}",
+            f"{m['decision_agreement']:.4f}",
+            f"{m['escalation_rate_fp32']:.4f}", f"{m['escalation_rate_int8']:.4f}",
+            f"{m['average_precision']['diff']:+.4f}", f"{m['roc_auc']['diff']:+.4f}",
+            f"{m['max_abs_logit_diff']:.3f}",
             f"{r['latency']['p50_ms']:.1f}", f"{r['latency']['p95_ms']:.1f}",
             f"{r.get('size_mb', float('nan')):.2f}", "yes" if m["ok"] else "NO",
         ]
 
-    ref_m = results[0]["parity"] if results else None
-    ref_row = ["fp32 onnx (ref)", "1.0000", "1.0000",
-               _fmt_rate(ref_m["fp32"]["recall"]).split()[0] if ref_m else "",
-               _fmt_rate(ref_m["fp32"]["benign_escalation"]).split()[0] if ref_m else "",
-               "+0.0000", "+0.0000", f"{ref_m['torch_vs_onnx_fp32']['max_abs_diff']:.3f}" if ref_m else "",
+    ref_row = ["fp32 onnx (ref)", "", "", "", "", "", "",
                f"{fp32_row['p50_ms']:.1f}", f"{fp32_row['p95_ms']:.1f}",
                f"{fp32_row.get('size_mb', float('nan')):.2f}", ""]
     rows = [ref_row] + [row(r["name"], r) for r in results]
@@ -599,17 +698,20 @@ def format_sweep_table(fp32_row: dict, results: list[dict], chosen: str | None =
     return "\n".join("  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip() for r in rows)
 
 
-def sweep(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
-          configs: list[str] | None = None, out_dir: str | Path | None = None, choose: bool = False,
-          chosen_path: str | Path | None = None, target_recall: float = 0.95, batch_size: int = 32,
-          latency_sample: int = 200, preprocess: bool = False, bulk_threads: int = 0,
-          min_decision_agreement: float = MIN_DECISION_AGREEMENT,
-          max_recall_diff: float = MAX_RECALL_DIFF, max_ap_drop: float = MAX_AP_DROP) -> dict:
-    """Quantize with each config, compare against fp32 on val (parity metrics
-    from a bulk session with `bulk_threads`, 0 = all cores; latency from a
-    separate batch-1, intra_op_num_threads=1 session, unchanged semantics), write sweep.json / sweep.md next
-    to the model, and with `choose` copy the best passing config to
-    <model_dir>/model_int8.onnx and record the choice in metadata.json."""
+def sweep(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Path,
+          targets_parquet: str | Path, configs: list[str] | None = None, out_dir: str | Path | None = None,
+          choose: bool = False, chosen_path: str | Path | None = None, target_recall: float = 0.95,
+          batch_size: int = 32, latency_sample: int = 200, preprocess: bool = False, bulk_threads: int = 0,
+          min_agreement: float = MIN_MATCHED_AGREEMENT, max_ap_drop: float = MAX_AP_DROP,
+          dev_ratio: float | None = None, seed: int | None = None) -> dict:
+    """Quantize with each config and select on the training dev fold (README
+    4.1: val is reserved for temperature scaling and threshold selection, so
+    it must not be used to pick a model config) at a matched escalation rate
+    (`matched_rate_metrics`, label-free: fp32's threshold does not transfer
+    to int8's shifted logits, so int8 gets its own threshold reproducing
+    fp32's escalation rate instead). Writes sweep.json / sweep.md next to the
+    model, and with `choose` copies the best passing config to
+    <model_dir>/model_int8.onnx and records the choice in metadata.json."""
     _require_ort()
     model_dir = Path(model_dir)
     names = list(configs) if configs else list(SWEEP_CONFIGS)
@@ -619,11 +721,12 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
     out_dir = Path(out_dir) if out_dir is not None else model_dir / "sweep"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ref = load_reference(model_dir, onnx_path, val_parquet, batch_size=batch_size, bulk_threads=bulk_threads)
-    t = reference_threshold(ref, target_recall)
+    ref = dev_fold_reference(model_dir, onnx_path, train_parquet, targets_parquet, dev_ratio=dev_ratio,
+                             seed=seed, batch_size=batch_size, bulk_threads=bulk_threads)
     fp32_latency = _latency_stats(onnx_path, ref, latency_sample)
     fp32_latency["size_mb"] = round(Path(onnx_path).stat().st_size / 1e6, 3)
-    print(f"[sweep] {len(ref['texts'])} val rows, t={t:.4f} (target recall {target_recall}); "
+    print(f"[sweep] dev fold: {ref['n_dev_rows']} rows (dropped {ref['n_dropped_unsure']} unsure; "
+          f"dev_ratio={ref['dev_ratio']}, seed={ref['seed']}, target recall {target_recall}); "
           f"fp32 onnx p50 {fp32_latency['p50_ms']:.1f} ms")
 
     results: list[dict] = []
@@ -634,28 +737,32 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
         info = quantize_with_config(onnx_path, int8_path, PRESETS[name], preprocess=preprocess)
         logits = _ort_logits(_ort_session(int8_path, intra_op_num_threads=bulk_threads), ref["tokenizer"],
                               ref["texts"], ref["max_len"], batch_size=batch_size)
-        parity = parity_metrics(ref["gold"], ref["torch_logits"], ref["onnx_fp32_logits"], logits, t,
-                                min_decision_agreement, max_recall_diff, max_ap_drop)
+        metrics = matched_rate_metrics(ref["gold"], ref["torch_logits"], logits, target_recall,
+                                       min_agreement, max_ap_drop)
         latency = _latency_stats(int8_path, ref, latency_sample)
         print(f"[sweep] {name}: scored {len(logits)} rows, timed {latency['n']} prompts "
               f"in {time.perf_counter() - t_cfg:.1f}s total")
-        results.append({"name": name, "path": str(int8_path), **info, "parity": parity, "latency": latency})
+        results.append({"name": name, "path": str(int8_path), **info, "metrics": metrics, "latency": latency})
 
     best = choose_best(results)
     chosen_name = best["name"] if best else None
     table = format_sweep_table(fp32_latency, results, chosen_name)
     print(table)
-    print("* = best passing config (highest decision agreement, ties by lower p50)" if best
-          else "[sweep] NO config passes the warning rule; nothing to choose")
+    print("* = best passing config (highest matched-rate decision agreement, ties by lower p50)" if best
+          else "[sweep] NO config passes the pass rule; nothing to choose")
 
     out = {
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "val": str(val_parquet), "threshold": t, "target_recall": target_recall,
-        "n_rows": len(ref["texts"]), "latency_sample": latency_sample,
-        "warn_rule": {"min_decision_agreement": min_decision_agreement,
-                      "max_recall_diff": max_recall_diff, "max_ap_drop": max_ap_drop},
+        "train_parquet": str(train_parquet), "targets_parquet": str(targets_parquet),
+        "dev_ratio": ref["dev_ratio"], "seed": ref["seed"],
+        "n_dev_rows": ref["n_dev_rows"], "n_dropped_unsure": ref["n_dropped_unsure"],
+        "target_recall": target_recall, "latency_sample": latency_sample,
+        "pass_rule": {"min_matched_agreement": min_agreement, "max_ap_drop": max_ap_drop},
         "fp32_onnx_latency": fp32_latency,
         "results": results, "chosen": chosen_name, "chosen_path": None,
+        "selection_note": "selected on the training dev fold (README 4.1 reserves val for "
+                           "temperature scaling and threshold selection) at a matched escalation "
+                           "rate, label-free",
     }
 
     if choose and best is not None:
@@ -668,10 +775,14 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
             meta["int8_quantization"] = _jsonable({
                 "config_name": best["name"], "config": best["config"],
                 "excluded_nodes": best["excluded_nodes"], "preprocess": best["preprocess"],
-                "path": str(dest), "chosen_at": out["created"], "threshold": t,
-                "decision_agreement": best["parity"]["decision_agreement"]["overall"],
-                "recall_fp32": best["parity"]["fp32"]["recall"], "recall_int8": best["parity"]["int8"]["recall"],
-                "average_precision_diff": best["parity"]["diff"]["average_precision"],
+                "path": str(dest), "chosen_at": out["created"],
+                "selected_on": "dev_fold", "dev_ratio": ref["dev_ratio"], "seed": ref["seed"],
+                "threshold_fp32": best["metrics"]["threshold_fp32"],
+                "threshold_int8": best["metrics"]["threshold_int8"],
+                "escalation_rate_fp32": best["metrics"]["escalation_rate_fp32"],
+                "escalation_rate_int8": best["metrics"]["escalation_rate_int8"],
+                "decision_agreement": best["metrics"]["decision_agreement"],
+                "average_precision_diff": best["metrics"]["average_precision"]["diff"],
                 "latency": best["latency"], "fp32_onnx_latency": fp32_latency,
             })
             meta_path.write_text(json.dumps(meta, indent=2))
@@ -682,11 +793,14 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, val_parquet: str | Path,
     json_path = model_dir / "sweep.json"
     json_path.write_text(json.dumps(_jsonable(out), indent=2))
     md = ["# Stage B int8 sweep", "",
-          f"val rows: {out['n_rows']}, threshold t={t:.4f} (target recall {target_recall}); "
-          f"latency: batch 1, 1 thread, median/p95 over up to {latency_sample} prompts.", "",
+          f"selection: training dev fold (dev_ratio={ref['dev_ratio']}, seed={ref['seed']}), "
+          f"{ref['n_dev_rows']} rows ({ref['n_dropped_unsure']} unsure dropped), target recall "
+          f"{target_recall}; matched escalation rate, label-free (val is reserved for temperature "
+          "scaling / threshold selection, README 4.1). latency: batch 1, 1 thread, median/p95 over "
+          f"up to {latency_sample} prompts.", "",
           format_sweep_table(fp32_latency, results, chosen_name, markdown=True), "",
-          f"Warning rule: decision agreement >= {min_decision_agreement}, recall diff <= max(1 item, "
-          f"{max_recall_diff}), AP drop <= {max_ap_drop}. `*` marks the chosen config: "
+          f"Pass rule: matched-rate decision agreement >= {min_agreement}, AP drop <= {max_ap_drop}. "
+          "`*` marks the chosen config (highest agreement, ties by lower p50): "
           + (f"`{chosen_name}`." if chosen_name else "none passed."), ""]
     (model_dir / "sweep.md").write_text("\n".join(md))
     print(f"[sweep] wrote {json_path} and {model_dir / 'sweep.md'}")
@@ -802,13 +916,8 @@ def _build_parser() -> argparse.ArgumentParser:
     q.add_argument("--preprocess", action="store_true",
                     help="run onnxruntime quantization pre-processing (shape inference / optimization) first")
 
-    def add_warn_args(sp):
-        sp.add_argument("--min-decision-agreement", type=float, default=MIN_DECISION_AGREEMENT)
-        sp.add_argument("--max-recall-diff", type=float, default=MAX_RECALL_DIFF,
-                         help="recall tolerance is max(1 item, this)")
-        sp.add_argument("--max-ap-drop", type=float, default=MAX_AP_DROP)
-
-    pa = sub.add_parser("parity", help="compare torch fp32 / onnx fp32 / onnx int8 on val")
+    pa = sub.add_parser("parity", help="informational only: fp32 vs int8 on val, each at its own "
+                                        "threshold (never gates int8 config selection)")
     pa.add_argument("--model", required=True)
     pa.add_argument("--onnx", required=True)
     pa.add_argument("--int8", required=True)
@@ -816,12 +925,15 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--target-recall", type=float, default=0.95)
     pa.add_argument("--out", default=None, help="default: <model>/parity.json")
     pa.add_argument("--bulk-threads", type=int, default=0, help="intra_op_num_threads for scoring; 0 = all cores")
-    add_warn_args(pa)
 
-    sw = sub.add_parser("sweep", help="try several quantization configs, compare parity and CPU latency")
+    sw = sub.add_parser("sweep", help="try several quantization configs; select on the training dev "
+                                       "fold at a matched escalation rate")
     sw.add_argument("--model", required=True)
     sw.add_argument("--onnx", required=True, help="fp32 ONNX graph")
-    sw.add_argument("--val", default="data/processed/val.parquet")
+    sw.add_argument("--train-parquet", default="data/processed/train.parquet")
+    sw.add_argument("--targets-parquet", default="data/interim/soft_targets.parquet")
+    sw.add_argument("--dev-ratio", type=float, default=None, help="default: metadata.json's dev_ratio")
+    sw.add_argument("--seed", type=int, default=None, help="default: metadata.json's seed")
     sw.add_argument("--configs", nargs="+", default=None, choices=sorted(PRESETS),
                      help=f"default: {' '.join(SWEEP_CONFIGS)}")
     sw.add_argument("--out-dir", default=None, help="default: <model>/sweep")
@@ -832,9 +944,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--latency-sample", type=int, default=200)
     sw.add_argument("--preprocess", action="store_true")
     sw.add_argument("--bulk-threads", type=int, default=0,
-                     help="intra_op_num_threads for parity scoring; 0 = all cores. Latency is always "
+                     help="intra_op_num_threads for dev-fold scoring; 0 = all cores. Latency is always "
                           "measured in its own 1-thread, batch-1 session")
-    add_warn_args(sw)
+    sw.add_argument("--min-matched-agreement", type=float, default=MIN_MATCHED_AGREEMENT)
+    sw.add_argument("--max-ap-drop", type=float, default=MAX_AP_DROP)
 
     p = sub.add_parser("predict", help="onnxruntime CPU predictor for the int8 model")
     p.add_argument("--model", required=True, help="dir with tokenizer + metadata.json")
@@ -863,17 +976,16 @@ def main(argv: list[str] | None = None) -> None:
                       preprocess=args.preprocess)
     elif args.command == "parity":
         parity_check(args.model, args.onnx, args.int8, args.val, target_recall=args.target_recall,
-                     min_decision_agreement=args.min_decision_agreement,
-                     max_recall_diff=args.max_recall_diff, max_ap_drop=args.max_ap_drop, out_path=args.out,
-                     bulk_threads=args.bulk_threads)
+                     out_path=args.out, bulk_threads=args.bulk_threads)
     elif args.command == "sweep":
-        result = sweep(args.model, args.onnx, args.val, configs=args.configs, out_dir=args.out_dir,
-                       choose=args.choose, chosen_path=args.chosen_path, target_recall=args.target_recall,
-                       latency_sample=args.latency_sample, preprocess=args.preprocess,
-                       bulk_threads=args.bulk_threads, min_decision_agreement=args.min_decision_agreement,
-                       max_recall_diff=args.max_recall_diff, max_ap_drop=args.max_ap_drop)
+        result = sweep(args.model, args.onnx, args.train_parquet, args.targets_parquet, configs=args.configs,
+                       out_dir=args.out_dir, choose=args.choose, chosen_path=args.chosen_path,
+                       target_recall=args.target_recall, latency_sample=args.latency_sample,
+                       preprocess=args.preprocess, bulk_threads=args.bulk_threads,
+                       min_agreement=args.min_matched_agreement, max_ap_drop=args.max_ap_drop,
+                       dev_ratio=args.dev_ratio, seed=args.seed)
         if args.choose and result["chosen"] is None:
-            raise SystemExit("sweep --choose: no quantization config passed the parity warning rule; "
+            raise SystemExit("sweep --choose: no quantization config passed the matched-rate pass rule; "
                              "model_int8.onnx was not written")
     elif args.command == "predict":
         predict_int8(args.model, args.int8, args.splits, data_dir=args.data_dir, out_dir=args.out_dir,

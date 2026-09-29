@@ -225,6 +225,45 @@ def test_train_predict_cli_end_to_end(tmp_path, tiny_base):
     M.validate(preds)  # raises on any schema violation
 
 
+def test_predict_writes_latency_sidecar(tmp_path, tiny_base):
+    train_df, targets_df, val_df = _make_synthetic_pool(n=20, n_val=10, seed=6)
+    data_dir = tmp_path / "data"
+    paths = _write_pool(data_dir, train_df, targets_df, val_df)
+
+    out_dir = tmp_path / "models" / "stage_b"
+    SB.train(base=str(tiny_base), out_dir=out_dir, train_parquet=paths["train"],
+              targets_parquet=paths["targets"], val_parquet=paths["val"], epochs=1, batch_size=8,
+              eval_batch_size=8, max_len=16, dev_ratio=0.2, seed=5)
+
+    preds_dir = tmp_path / "preds"
+    written = SB.predict(model_dir=out_dir, splits=["val"], data_dir=data_dir, out_dir=preds_dir,
+                          batch_size=8, latency_sample=4, latency_threads=1)
+    assert written
+
+    sidecar = preds_dir / "stage_b_latency.json"
+    assert sidecar.exists()
+    payload = json.loads(sidecar.read_text())
+    assert payload["latency_protocol"] == {
+        "threads": 1, "batch": 1, "sample_size": 4, "includes_tokenization": True,
+    }
+    assert payload["n"] == min(4, len(val_df))
+    assert payload["p50_ms"] is not None and payload["p95_ms"] is not None
+
+
+def test_measure_latency_ms_restores_thread_count(tiny_base):
+    tok = _tiny_tokenizer()
+    student = SB.build_student(config=_tiny_config(tok.vocab_size))
+    previous = torch.get_num_threads()
+    try:
+        torch.set_num_threads(max(2, previous))
+        before = torch.get_num_threads()
+        out = SB.measure_latency_ms(student, tok, SENTENCES, 16, "cpu", sample_size=3, threads=1)
+        assert len(out) == 3
+        assert torch.get_num_threads() == before
+    finally:
+        torch.set_num_threads(previous)
+
+
 def test_training_selects_identically_without_val(tmp_path, tiny_base):
     train_df, targets_df, val_df = _make_synthetic_pool(n=30, seed=11)
     data_dir = tmp_path / "data"
@@ -313,9 +352,13 @@ def test_export_onnx_int8_parity(tiny_export):
 
     out_json = tiny_export["root"] / "parity_out.json"
     result = EX.parity_check(model_dir, onnx_path, int8_path, val, target_recall=0.6, out_path=out_json)
+    # informational only: no pass/fail fields, each side has its own threshold
+    assert "ok" not in result and "warnings" not in result
+    assert result["informational"] is True
+    assert "informational only" in result["note"]
     assert result["torch_vs_onnx_fp32"]["max_abs_diff"] < 1e-2
     assert 0.0 <= result["torch_vs_onnx_int8"]["argmax_agreement"] <= 1.0
-    for key in ("decision_agreement", "fp32", "int8", "diff", "warnings", "ok", "threshold"):
+    for key in ("decision_agreement", "fp32", "int8", "diff", "threshold_fp32", "threshold_int8"):
         assert key in result
     assert 0.0 <= result["decision_agreement"]["overall"] <= 1.0
     for side in ("fp32", "int8"):
@@ -346,6 +389,9 @@ def test_export_onnx_int8_parity(tiny_export):
 
 
 def test_parity_metrics_identical_models():
+    """parity_metrics is informational only (never gates); with identical
+    fp32/int8 logits and the same threshold on both sides, decisions agree
+    everywhere."""
     from reflex_sentry.models import export_onnx as EX
 
     rng = np.random.default_rng(0)
@@ -353,7 +399,8 @@ def test_parity_metrics_identical_models():
     logits = rng.normal(size=(60, 3))
     logits[:20, 1] += 2.0
     logits[20:50, 0] += 2.0
-    m = EX.parity_metrics(gold, logits, logits, logits, t=0.3)
+    m = EX.parity_metrics(gold, logits, logits, logits, t_fp32=0.3)
+    assert m["threshold_fp32"] == m["threshold_int8"] == 0.3
     assert m["decision_agreement"]["overall"] == 1.0
     assert m["decision_agreement"]["dangerous"] == 1.0
     assert m["decision_agreement"]["n_disagree"] == 0
@@ -361,7 +408,8 @@ def test_parity_metrics_identical_models():
     assert m["diff"]["average_precision"] == 0.0 and m["diff"]["roc_auc"] == 0.0
     assert m["torch_vs_onnx_int8"]["max_abs_diff"] == 0.0
     assert m["torch_vs_onnx_int8"]["argmax_agreement"] == 1.0
-    assert m["ok"] and m["warnings"] == []
+    assert m["informational"] is True
+    assert "ok" not in m and "warnings" not in m
     # counts are consistent with an independent computation
     p_safe = SB._softmax(logits)[:, 0]
     assert m["fp32"]["recall"] == {"k": int((p_safe[:20] < 0.3).sum()), "n": 20,
@@ -370,30 +418,69 @@ def test_parity_metrics_identical_models():
     assert m["n_ambiguous"] == 10
 
 
-def test_parity_warning_rule():
+def test_parity_metrics_own_thresholds_never_gate():
+    """Different thresholds per side (the deployment-realistic case: each
+    variant is calibrated separately) still produce a well-formed report with
+    no pass/fail semantics -- parity never gates int8 selection."""
     from reflex_sentry.models import export_onnx as EX
 
     gold = np.array(["dangerous"] * 48 + ["benign"] * 100)
     base = np.zeros((148, 3))
     base[:48, 1] = 3.0   # p_safe small -> escalated
     base[48:, 0] = 3.0   # p_safe large -> passed
-    # flip exactly one dangerous row to "pass" in int8: 1 item on 48 is within tolerance
-    one = base.copy()
-    one[0] = [3.0, 0.0, 0.0]
-    m1 = EX.parity_metrics(gold, base, base, one, t=0.5)
-    assert m1["diff"]["recall_items"] == -1
-    assert not any("recall" in w for w in m1["warnings"])
-    assert m1["decision_agreement"]["overall"] == pytest.approx(147 / 148)
-    # two items exceed max(1 item, 2 points)
-    two = one.copy()
-    two[1] = [3.0, 0.0, 0.0]
-    m2 = EX.parity_metrics(gold, base, base, two, t=0.5)
-    assert any("recall" in w for w in m2["warnings"]) and not m2["ok"]
-    # heavy disagreement trips the agreement rule
+    # heavy disagreement at a shared threshold would have tripped the old gate
     many = base.copy()
     many[48:60] = [0.0, 3.0, 0.0]
-    m3 = EX.parity_metrics(gold, base, base, many, t=0.5)
-    assert any("decision agreement" in w for w in m3["warnings"])
+    m = EX.parity_metrics(gold, base, base, many, t_fp32=0.5, t_int8=0.5)
+    assert "ok" not in m and "warnings" not in m
+    assert m["decision_agreement"]["overall"] < 1.0  # still reported, just not gated
+    # t_int8 defaults to t_fp32 when omitted
+    m2 = EX.parity_metrics(gold, base, base, many, t_fp32=0.5)
+    assert m2["threshold_int8"] == m2["threshold_fp32"] == 0.5
+
+
+def test_matched_rate_metrics_identical_models():
+    """Identical fp32/int8 logits: int8's matched-rate threshold reproduces
+    fp32's escalation set exactly, so decision agreement is 1.0 and the
+    config passes."""
+    from reflex_sentry.models import export_onnx as EX
+
+    rng = np.random.default_rng(0)
+    gold = np.array(["dangerous"] * 20 + ["benign"] * 30)
+    logits = rng.normal(size=(50, 3))
+    logits[:20, 1] += 2.0
+    logits[20:, 0] += 2.0
+    m = EX.matched_rate_metrics(gold, logits, logits, target_recall=0.6)
+    assert m["decision_agreement"] == 1.0
+    assert m["escalation_count_fp32"] == m["escalation_count_int8"]
+    assert m["average_precision"]["diff"] == 0.0 and m["roc_auc"]["diff"] == 0.0
+    assert m["max_abs_logit_diff"] == 0.0
+    assert m["ok"] and m["warnings"] == []
+
+
+def test_matched_rate_metrics_pass_rule():
+    from reflex_sentry.models import export_onnx as EX
+
+    gold = np.array(["dangerous"] * 48 + ["benign"] * 100)
+    base = np.zeros((148, 3))
+    base[:48, 1] = 3.0   # dangerous rows: low p_safe
+    base[48:, 0] = 3.0   # benign rows: high p_safe
+
+    # a uniformly rescaled copy preserves ranking (and hence the matched
+    # escalation set) exactly -> passes
+    scaled = base * 0.5
+    m_ok = EX.matched_rate_metrics(gold, base, scaled, target_recall=0.6)
+    assert m_ok["ok"]
+    assert m_ok["decision_agreement"] >= 0.97
+    assert m_ok["average_precision"]["diff"] == pytest.approx(0.0, abs=1e-9)
+
+    # a ranking scrambled at random breaks both the agreement and AP rules
+    rng = np.random.default_rng(1)
+    scrambled = rng.normal(size=base.shape)
+    m_bad = EX.matched_rate_metrics(gold, base, scrambled, target_recall=0.6,
+                                    min_agreement=0.97, max_ap_drop=0.01)
+    assert not m_bad["ok"]
+    assert m_bad["warnings"]
 
 
 def test_quant_config_presets_and_overrides():
@@ -558,27 +645,31 @@ def test_sweep_end_to_end_and_choose(tiny_export):
         shutil.rmtree(model_dir)
     shutil.copytree(tiny_export["model_dir"], model_dir)
     onnx_path = model_dir / "model.onnx"
+    train_parquet = tiny_export["data_dir"] / "train.parquet"
+    targets_parquet = tiny_export["data_dir"] / "soft_targets.parquet"
 
     # lenient rule so the random tiny model deterministically passes and --choose has something to pick
-    EX.main(["sweep", "--model", str(model_dir), "--onnx", str(onnx_path), "--val", str(tiny_export["val"]),
+    EX.main(["sweep", "--model", str(model_dir), "--onnx", str(onnx_path),
+             "--train-parquet", str(train_parquet), "--targets-parquet", str(targets_parquet),
              "--target-recall", "0.6", "--latency-sample", "6", "--choose",
-             "--min-decision-agreement", "0.0", "--max-recall-diff", "1.0", "--max-ap-drop", "1.0"])
+             "--min-matched-agreement", "0.0", "--max-ap-drop", "1.0"])
 
     for name in EX.SWEEP_CONFIGS:
         assert (model_dir / "sweep" / f"{name}.onnx").exists()
     assert (model_dir / "sweep.md").exists()
     sw = json.loads((model_dir / "sweep.json").read_text())
+    # selection ran on the dev fold, not val
+    assert "val" not in sw and sw["train_parquet"] == str(train_parquet)
     assert [r["name"] for r in sw["results"]] == EX.SWEEP_CONFIGS
     for r in sw["results"]:
         assert r["latency"]["p50_ms"] > 0 and r["latency"]["p95_ms"] >= r["latency"]["p50_ms"]
-        assert 0.0 <= r["parity"]["decision_agreement"]["overall"] <= 1.0
-        assert r["parity"]["ok"]
+        assert 0.0 <= r["metrics"]["decision_agreement"] <= 1.0
+        assert r["metrics"]["ok"]
     assert sw["fp32_onnx_latency"]["p50_ms"] > 0
     assert sw["chosen"] in EX.SWEEP_CONFIGS
 
     # chosen = highest agreement, ties by lower p50
-    best = min(sw["results"], key=lambda r: (-r["parity"]["decision_agreement"]["overall"],
-                                             r["latency"]["p50_ms"]))
+    best = min(sw["results"], key=lambda r: (-r["metrics"]["decision_agreement"], r["latency"]["p50_ms"]))
     assert sw["chosen"] == best["name"]
 
     chosen_file = model_dir / "model_int8.onnx"
@@ -586,6 +677,7 @@ def test_sweep_end_to_end_and_choose(tiny_export):
     assert chosen_file.read_bytes() == (model_dir / "sweep" / f"{sw['chosen']}.onnx").read_bytes()
     meta = json.loads((model_dir / "metadata.json").read_text())
     assert meta["int8_quantization"]["config_name"] == sw["chosen"]
+    assert meta["int8_quantization"]["selected_on"] == "dev_fold"
     assert "config" in meta["int8_quantization"] and "latency" in meta["int8_quantization"]
     assert "base" in meta  # original metadata preserved
 
@@ -598,11 +690,47 @@ def test_sweep_choose_refuses_when_nothing_passes(tiny_export):
     if model_dir.exists():
         shutil.rmtree(model_dir)
     shutil.copytree(tiny_export["model_dir"], model_dir)
-    result = EX.sweep(model_dir, model_dir / "model.onnx", tiny_export["val"], configs=["legacy"],
-                      choose=True, target_recall=0.6, latency_sample=3, min_decision_agreement=1.01)
+    train_parquet = tiny_export["data_dir"] / "train.parquet"
+    targets_parquet = tiny_export["data_dir"] / "soft_targets.parquet"
+    result = EX.sweep(model_dir, model_dir / "model.onnx", train_parquet, targets_parquet, configs=["legacy"],
+                      choose=True, target_recall=0.6, latency_sample=3, min_agreement=1.01)
     assert result["chosen"] is None
     assert not (model_dir / "model_int8.onnx").exists()
     with pytest.raises(SystemExit):
         EX.main(["sweep", "--model", str(model_dir), "--onnx", str(model_dir / "model.onnx"),
-                 "--val", str(tiny_export["val"]), "--configs", "legacy", "--choose", "--latency-sample", "3",
-                 "--target-recall", "0.6", "--min-decision-agreement", "1.01"])
+                 "--train-parquet", str(train_parquet), "--targets-parquet", str(targets_parquet),
+                 "--configs", "legacy", "--choose", "--latency-sample", "3",
+                 "--target-recall", "0.6", "--min-matched-agreement", "1.01"])
+
+
+def test_sweep_dev_fold_never_reads_val(tiny_export, monkeypatch):
+    """The int8 sweep selects on the training dev fold (README 4.1: val is
+    reserved for temperature scaling and threshold selection). Monkeypatch
+    pd.read_parquet to record every path it is asked to read and assert none
+    of them is val.parquet."""
+    import shutil
+    from reflex_sentry.models import export_onnx as EX
+
+    model_dir = tiny_export["root"] / "model_sweep_no_val"
+    if model_dir.exists():
+        shutil.rmtree(model_dir)
+    shutil.copytree(tiny_export["model_dir"], model_dir)
+    train_parquet = tiny_export["data_dir"] / "train.parquet"
+    targets_parquet = tiny_export["data_dir"] / "soft_targets.parquet"
+
+    seen: list[str] = []
+    real_read_parquet = pd.read_parquet
+
+    def spy(path, *a, **kw):
+        seen.append(str(path))
+        return real_read_parquet(path, *a, **kw)
+
+    monkeypatch.setattr(pd, "read_parquet", spy)
+
+    EX.sweep(model_dir, model_dir / "model.onnx", train_parquet, targets_parquet, configs=["legacy"],
+             choose=False, target_recall=0.6, latency_sample=3)
+
+    assert seen, "sweep should have read at least the train/targets parquet files"
+    assert not any(Path(p).name == "val.parquet" for p in seen)
+    assert any(Path(p).name == "train.parquet" for p in seen)
+    assert any(Path(p).name == "soft_targets.parquet" for p in seen)

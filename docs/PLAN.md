@@ -66,6 +66,12 @@ Repeat with `--model qwen3guard_gen_8b` if that teacher is used. The merge drops
 
 Raw and processed data, gold labels, teacher scores, and model artifacts are never committed. `data/SOURCES.md` is the one exception (license and provenance notes per dataset), and `.gitignore` is written as `data/*` plus `!data/SOURCES.md` so that file can be tracked while everything else under `data/` stays ignored.
 
+### 2026-09-28: int8 config selection moved from val to the training dev fold, matched escalation rate
+
+The real ModernBERT-student run showed every int8 config within +/-0.01 AP of fp32 on val (ranking preserved), but decision agreement at the fp32-selected val threshold was only 0.925 to 0.940 -- below the 0.97 gate -- because int8 shifts the logits and fp32's threshold does not transfer to it. Two problems, not one: first, that criterion is the wrong one, since in deployment each variant (fp32, int8) is calibrated separately (`reflex_sentry.eval.run_all` fits its own temperature and threshold per model on `val`), so comparing decisions at a single shared threshold was never the right test. Second, `export_onnx sweep` was choosing a config using `val` at all, which section 4.1 reserves for temperature scaling and threshold selection only, not model-config selection.
+
+Fix: `export_onnx sweep` now selects on the **training dev fold** -- the same held-out rows `stage_b.make_dev_split` already carves out for checkpoint selection (reusing `metadata.json`'s `seed`/`dev_ratio`), labeled by soft-target argmax (dangerous vs benign; argmax-`unsure` rows dropped, since they are not part of the ranking task). The comparison is **matched escalation rate, label-free**: `t_fp32` is picked on the dev fold for 0.95 recall, and int8 gets its own threshold chosen to reproduce fp32's escalation count at `t_fp32`, not `t_fp32` itself. Pass rule: matched-rate decision agreement >= 0.97 and AP drop <= 0.01; `--choose` keeps the highest-agreement passing config, ties by lower p50 latency. `export_onnx parity` still runs on `val`, but is now explicitly informational only (fp32 and int8 each at their own val-calibrated threshold) and never gates anything -- see README 4.5, `reflex_sentry/models/export_onnx.py` (`dev_fold_reference`, `matched_rate_metrics`, `matched_rate_threshold`), and `scripts/run_stage_b_local.sh`.
+
 ---
 
 ## Milestone checklist
