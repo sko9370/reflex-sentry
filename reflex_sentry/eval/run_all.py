@@ -17,17 +17,21 @@ For each model name given:
   (d) after every model is scored, builds `reports/comparison.md` and
       `reports/comparison.csv` (README 5.4 columns) from each model/split's
       `metrics.json`
+  (e) optionally applies the deterministic pre-check to each calibrated
+      base model and scores its `<model>_pc` predictions separately
 
     python -m reflex_sentry.eval.run_all --models keyword stage_a \
         [--processed-dir data/processed] [--preds-dir preds] \
         [--reports-dir reports] [--models-dir models] \
-        [--config configs/eval.yaml]
+        [--config configs/eval.yaml] [--precheck]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
+from typing import Sequence
 
 import pandas as pd
 
@@ -61,8 +65,9 @@ def ensure_test_evasion(processed_dir: Path) -> None:
 
 # ------------------------------------------------------------------- (c) ---
 
-def score_keyword(processed_dir: Path, preds_dir: Path, rules_path: str) -> None:
-    for split in SPLITS:
+def score_keyword(processed_dir: Path, preds_dir: Path, rules_path: str,
+                  splits: Sequence[str] = SPLITS) -> None:
+    for split in splits:
         src = processed_dir / f"{split}.parquet"
         if not src.exists():
             continue
@@ -71,7 +76,7 @@ def score_keyword(processed_dir: Path, preds_dir: Path, rules_path: str) -> None
 
 # ------------------------------------------------------------------- (b) ---
 
-def calibrate_model(model: str, preds_dir: Path) -> bool:
+def calibrate_model(model: str, preds_dir: Path, splits: Sequence[str] = SPLITS) -> bool:
     """Fit temperature on this model's val logits and apply it to every
     split's logits file found. Returns True if calibration ran."""
     val_logits_path = preds_dir / f"{model}_val_logits.csv"
@@ -82,7 +87,7 @@ def calibrate_model(model: str, preds_dir: Path) -> bool:
     if y.isna().any() or y.empty:
         return False
     T = C.fit_temperature(val_df[C.LOGIT_COLS].to_numpy(dtype=float), y.to_numpy(dtype=int))
-    for split in SPLITS:
+    for split in dict.fromkeys(("val", *splits)):
         logits_path = preds_dir / f"{model}_{split}_logits.csv"
         if not logits_path.exists():
             continue
@@ -92,16 +97,19 @@ def calibrate_model(model: str, preds_dir: Path) -> bool:
 
 
 def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: Path,
-                  config: str | None) -> dict:
+                  config: str | None, splits: Sequence[str] = SPLITS) -> dict:
     results: dict = {}
     val_preds = preds_dir / f"{model}_val.csv"
     val_arg = str(val_preds) if val_preds.exists() else None
     for split in SPLITS:
         gold_path = processed_dir / f"{split}.parquet"
         preds_path = preds_dir / f"{model}_{split}.csv"
-        if not gold_path.exists() or not preds_path.exists():
-            continue
         out_dir = reports_dir / f"{model}_{split}"
+        if split not in splits or not gold_path.exists() or not preds_path.exists():
+            # A previous invocation may have reported this split. Its metrics
+            # cannot describe the model/split set requested in this run.
+            shutil.rmtree(out_dir, ignore_errors=True)
+            continue
         results[split] = R.run(str(preds_path), str(out_dir), val=val_arg, config=config)
     return results
 
@@ -137,7 +145,10 @@ def _read_metrics(reports_dir: Path, model: str, split: str) -> dict | None:
 def _params_for(model: str, models_dir: Path):
     if model == "keyword":
         return 0
-    meta_path = models_dir / model / "metadata.json"
+    # The pre-check and int8 export add no trainable parameters.
+    base = model[: -len("_pc")] if model.endswith("_pc") else model
+    base = base[: -len("_int8")] if base.endswith("_int8") else base
+    meta_path = models_dir / base / "metadata.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
         return meta.get("params", meta.get("n_params", "n/a"))
@@ -145,6 +156,15 @@ def _params_for(model: str, models_dir: Path):
 
 
 MODEL_ORDER = ("keyword", "stage_a", "stage_b", "stage_b_int8")
+
+
+def _model_order_key(m: str) -> tuple:
+    """Put each pre-check variant directly after its base model."""
+    is_pc = m.endswith("_pc")
+    base = m[:-3] if is_pc else m
+    if base in MODEL_ORDER:
+        return (MODEL_ORDER.index(base), "", int(is_pc))
+    return (len(MODEL_ORDER), base, int(is_pc))
 
 
 def discover_reported_models(reports_dir: Path) -> list[str]:
@@ -156,7 +176,7 @@ def discover_reported_models(reports_dir: Path) -> list[str]:
             if name.endswith("_" + split):
                 found.add(name[: -len(split) - 1])
                 break
-    return sorted(found, key=lambda m: (MODEL_ORDER.index(m) if m in MODEL_ORDER else len(MODEL_ORDER), m))
+    return sorted(found, key=_model_order_key)
 
 
 def build_comparison(models, processed_dir: Path, preds_dir: Path, reports_dir: Path,
@@ -189,24 +209,49 @@ def build_comparison(models, processed_dir: Path, preds_dir: Path, reports_dir: 
 def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
         preds_dir: str | Path = DEFAULT_PREDS_DIR, reports_dir: str | Path = DEFAULT_REPORTS_DIR,
         models_dir: str | Path = DEFAULT_MODELS_DIR, config: str | None = None,
-        keyword_rules_path: str = DEFAULT_KEYWORD_RULES) -> pd.DataFrame:
+        keyword_rules_path: str = DEFAULT_KEYWORD_RULES, precheck: bool = False,
+        splits: Sequence[str] | None = None) -> pd.DataFrame:
+    selected_splits = tuple(dict.fromkeys(SPLITS if splits is None else splits))
+    if not selected_splits or any(split not in SPLITS for split in selected_splits):
+        raise ValueError(f"splits must be one or more of: {', '.join(SPLITS)}")
+    if precheck:
+        invalid = [m for m in models if m == "keyword" or m.endswith("_pc")]
+        if invalid:
+            raise ValueError("--precheck requires base student models; unsupported: " + ", ".join(invalid))
     processed_dir, preds_dir = Path(processed_dir), Path(preds_dir)
     reports_dir, models_dir = Path(reports_dir), Path(models_dir)
     preds_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    ensure_test_evasion(processed_dir)
+    if "test_evasion" in selected_splits:
+        ensure_test_evasion(processed_dir)
 
     for model in models:
         if model == "keyword":
-            score_keyword(processed_dir, preds_dir, keyword_rules_path)
-        calibrate_model(model, preds_dir)
-        report_model(model, processed_dir, preds_dir, reports_dir, config)
+            score_keyword(processed_dir, preds_dir, keyword_rules_path, selected_splits)
+        calibrate_model(model, preds_dir, selected_splits)
+        report_model(model, processed_dir, preds_dir, reports_dir, config, selected_splits)
+        if precheck:
+            from ..models import precheck as PC
+
+            # Validation predictions are needed to select this variant's
+            # threshold even when val is omitted from the reported splits.
+            apply_splits = tuple(dict.fromkeys(("val", *selected_splits)))
+            written = PC.apply_precheck(model, splits=apply_splits, preds_dir=preds_dir,
+                                        processed_dir=processed_dir)
+            for split in SPLITS:
+                if split not in written:
+                    (preds_dir / f"{model}_pc_{split}.csv").unlink(missing_ok=True)
+                    shutil.rmtree(reports_dir / f"{model}_pc_{split}", ignore_errors=True)
+            # The variant uses the already-calibrated probabilities. Never fit
+            # a separate temperature to its outputs.
+            report_model(f"{model}_pc", processed_dir, preds_dir, reports_dir, config, selected_splits)
 
     # The table covers every model that has reports, not only the ones scored
     # in this call, so running one model does not drop the others' rows.
     table_models = discover_reported_models(reports_dir)
     table_models += [m for m in models if m not in table_models]
+    table_models = sorted(set(table_models), key=_model_order_key)
     table = build_comparison(table_models, processed_dir, preds_dir, reports_dir, models_dir)
     table.to_csv(reports_dir / "comparison.csv", index=False)
     (reports_dir / "comparison.md").write_text(
@@ -223,9 +268,13 @@ def main() -> None:
     ap.add_argument("--models-dir", default=DEFAULT_MODELS_DIR)
     ap.add_argument("--config", default=None, help="configs/eval.yaml")
     ap.add_argument("--keyword-rules", default=DEFAULT_KEYWORD_RULES)
+    ap.add_argument("--precheck", action="store_true",
+                    help="apply and report a deterministic pre-check for each base student")
+    ap.add_argument("--splits", nargs="+", choices=SPLITS, default=list(SPLITS),
+                    help="splits to score (default: all available splits)")
     a = ap.parse_args()
     table = run(a.models, a.processed_dir, a.preds_dir, a.reports_dir, a.models_dir, a.config,
-                a.keyword_rules)
+                a.keyword_rules, a.precheck, a.splits)
     print(table.to_string(index=False))
     print(f"comparison table: {Path(a.reports_dir) / 'comparison.md'}")
 

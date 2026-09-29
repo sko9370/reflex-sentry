@@ -312,3 +312,33 @@ bash scripts/run_stage_b_local.sh
 - **Gold set size.** 300 to 500 per split (per README) is a starting target; whether that is enough to keep confidence intervals usably tight on rare categories (e.g. per-`cat:*` recall) depends on how thin the cyber-scope pool actually is once filtered.
 - **Gated dataset access.** WildGuardMix and Aegis 2.0 are gated on Hugging Face; Llama Guard 3 8B likewise requires accepting Meta's license. These need a human to accept terms before the pipeline can download or run them.
 - **Hard-negative realism.** AI-assisted drafts in `seeds/hard_negatives.csv` need human review before being treated as gold; how much revision they need is not yet known.
+
+### 2026-09-28: finish Stage B pre-check continuation
+
+Reviewed the imported Claude conversation and preserved its unfinished detector
+implementation and thresholds. Added explicit `run_all --precheck` integration,
+so calibration precedes pre-check generation and both base and `_pc` variants
+appear in the comparison. The local script now passes data/output directories
+and fp32 CPU latency settings through consistently.
+The script checks dictionary setup before expensive export/sweep work.
+Explicit split selection removes stale reports for omitted/unavailable splits
+of requested models, while refreshing val predictions for threshold selection.
+
+Correctness fixes: flagged rows use `[0, 0, 1]` rather than `[0.02, 0.08, 0.90]`,
+which could fail to escalate at thresholds below 0.02. Missing base timings stay
+missing, including when the entire latency column is absent. Prediction ids must
+match the processed split exactly before applying the pre-check. The English
+word list loads lazily, fails explicitly if missing/empty, and can be generated
+from a local Hunspell dictionary with recorded hashes. The generated third-party
+list is ignored by Git; its builder reproduces the existing 36,432-word list
+byte for byte on this machine. No detector retuning or training took place.
+
+Re-evaluation from existing logits: fp32 dangerous evasion recall rises from
+71.81% to 96.81%, with test recall unchanged at 97.87%, benign escalation at
+7.66%, and OOD recall at 85.12%. Int8 evasion rises from 72.87% to 95.74%, but
+its test recall (93.62%) and OOD recall (76.86%) still trail fp32. These are
+post-hoc evasion refinements, not independent holdout confirmation. The existing
+ordinary-benign audit flags 16/2000 rows; the heuristic Spanish/Portuguese bucket
+is 6/33 and remains a limitation. The pre-check does not resolve distribution
+shift, and its combined timing uses cached base samples plus new pre-check time.
+Teacher scoring for the separate easy-benign slice remains outstanding.

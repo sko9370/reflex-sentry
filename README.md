@@ -190,6 +190,48 @@ Fit a single temperature `T` on `val` logits (`reflex_sentry.eval.calibrate.fit_
 
 ---
 
+### 4.6 Deterministic obfuscation pre-check
+
+Stage B can be evaluated with an optional pre-check for encoded blobs,
+character substitution, low English-word coverage, spacing, and mixed-script
+tokens. It routes flagged inputs to `unsure`; it does not label them dangerous.
+The `_pc` rows keep the calibrated base probabilities for unflagged inputs
+and use `[0, 0, 1]` for flagged inputs, ensuring escalation at any positive
+safe-probability threshold. These overrides are routing policy, not calibrated
+confidence estimates. Each variant's threshold is selected on its own val output.
+
+Build the English vocabulary from a locally installed Hunspell dictionary:
+
+```bash
+python -m reflex_sentry.models.build_precheck_words --dictionary /usr/share/hunspell/en_US.dic
+python -m reflex_sentry.eval.run_all --models stage_b stage_b_int8 --precheck --config configs/eval.yaml
+```
+
+The evaluation command reuses existing logits, calibrates each base first,
+then regenerates and reports its `_pc` variant. The full local Stage B script
+also includes these variants and checks the dictionary before model export.
+Use `--splits` to limit evaluation; old reports for omitted or unavailable
+splits of the requested models are removed, while val predictions remain the
+calibration reference. The generated dictionary stays out of Git;
+see `reflex_sentry/models/data/README.md` for custom paths and reproducibility.
+Missing or empty dictionaries raise an explicit setup error.
+
+The pre-check was developed after observing the base model's evasion failures,
+so its results are a post-hoc refinement, not an untouched holdout result.
+Detector thresholds were held fixed during this continuation. The English-word
+and mixed-script heuristics can escalate ordinary non-English text; the audit's
+language buckets are heuristics, not validated language labels. Fenced code and
+hash-length exclusions also leave intentional blind spots. The audit reports
+aggregate flag rates without printing prompts:
+
+```bash
+python -m reflex_sentry.models.precheck audit
+```
+
+Reported `_pc` latency adds measured pre-check time to the base model's cached
+per-row timing samples, preserving missing samples. It is an estimate of the
+combined cost, not a fresh end-to-end benchmark or a short-circuit deployment.
+
 ## 5. Evaluation framework
 
 Everything in this section is implemented in `reflex_sentry/eval/` and runs on a CSV of predictions. The harness is model-agnostic: any model, teacher, or baseline that writes this file can be scored the same way, which is how you compare your student against an off-the-shelf guard model.

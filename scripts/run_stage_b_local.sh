@@ -20,6 +20,7 @@ set -euo pipefail
 #   TRAIN_PARQUET   $DATA_DIR/train.parquet    training pool, for reconstructing the dev fold
 #   SOFT_TARGETS_PARQUET  data/interim/soft_targets.parquet  soft targets, ditto
 #   PREDS_DIR       preds                     where *_logits.csv files land
+#   REPORTS_DIR     reports                   evaluation reports and comparison table
 #   SPLITS          "val test test_ood test_evasion"
 #   INTRA_OP_THREADS  1                   threads for the batch-1 latency session (1 = single-core gate);
 #                                         latency_ms keeps its single-core meaning
@@ -32,6 +33,7 @@ cd "$(git rev-parse --show-toplevel)"
 MODEL_DIR="${MODEL_DIR:-models/stage_b}"
 DATA_DIR="${DATA_DIR:-data/processed}"
 PREDS_DIR="${PREDS_DIR:-preds}"
+REPORTS_DIR="${REPORTS_DIR:-reports}"
 SPLITS="${SPLITS:-val test test_ood test_evasion}"
 INTRA_OP_THREADS="${INTRA_OP_THREADS:-1}"
 BULK_THREADS="${BULK_THREADS:-0}"
@@ -61,6 +63,9 @@ test -f "$VAL_PARQUET" || {
     exit 1
 }
 
+# Fail before export/sweep if the pre-check's runtime dictionary is absent.
+python3 -c 'from reflex_sentry.models.precheck import _common_words; _common_words()'
+
 echo "== exporting fp32 ONNX =="
 python3 -m reflex_sentry.models.export_onnx export --model "$MODEL_DIR" --out "$ONNX_PATH"
 
@@ -75,7 +80,8 @@ python3 -m reflex_sentry.models.export_onnx sweep \
     echo "         Skipping int8; the fp32 stage_b row is still produced." >&2
     # Remove stale int8 artifacts so an old model cannot leak into the table.
     rm -f "$INT8_PATH" "$PREDS_DIR"/stage_b_int8_*_logits.csv "$PREDS_DIR"/stage_b_int8_*.csv
-    rm -rf reports/stage_b_int8_*
+    rm -f "$PREDS_DIR"/stage_b_int8_pc_*.csv
+    rm -rf "$REPORTS_DIR"/stage_b_int8_*
 }
 
 if [ "$INT8_OK" = 1 ]; then
@@ -86,7 +92,7 @@ if [ "$INT8_OK" = 1 ]; then
 fi
 
 echo "== building the evasion-wrapped test set if test.parquet exists =="
-python3 -c "from pathlib import Path; from reflex_sentry.eval.run_all import ensure_test_evasion; ensure_test_evasion(Path('data/processed'))"
+python3 -c 'import sys; from pathlib import Path; from reflex_sentry.eval.run_all import ensure_test_evasion; ensure_test_evasion(Path(sys.argv[1]))' "$DATA_DIR"
 
 if [ "$INT8_OK" = 1 ]; then
     echo "== int8 CPU predict on: $SPLITS =="
@@ -100,12 +106,15 @@ fi
 echo "== fp32 CPU predict on: $SPLITS (for the stage_b row in the comparison table) =="
 # shellcheck disable=SC2086
 python3 -m reflex_sentry.models.stage_b predict \
-    --model "$MODEL_DIR" --splits $SPLITS --data-dir "$DATA_DIR" --out-dir "$PREDS_DIR"
+    --model "$MODEL_DIR" --splits $SPLITS --data-dir "$DATA_DIR" --out-dir "$PREDS_DIR" \
+    --device cpu --latency-threads "$INTRA_OP_THREADS" --latency-sample "$LATENCY_SAMPLE"
 
 echo "== scoring both variants with the shared eval harness =="
 if [ "$INT8_OK" = 1 ]; then MODELS="stage_b stage_b_int8"; else MODELS="stage_b"; fi
 # shellcheck disable=SC2086
-python3 -m reflex_sentry.eval.run_all --models $MODELS
+python3 -m reflex_sentry.eval.run_all --models $MODELS --precheck \
+    --processed-dir "$DATA_DIR" --preds-dir "$PREDS_DIR" --reports-dir "$REPORTS_DIR" \
+    --models-dir "$(dirname "$MODEL_DIR")" --splits $SPLITS
 
 echo
 echo "done. fp32 logits:  ${PREDS_DIR}/stage_b_<split>_logits.csv"
