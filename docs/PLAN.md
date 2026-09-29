@@ -342,3 +342,31 @@ ordinary-benign audit flags 16/2000 rows; the heuristic Spanish/Portuguese bucke
 is 6/33 and remains a limitation. The pre-check does not resolve distribution
 shift, and its combined timing uses cached base samples plus new pre-check time.
 Teacher scoring for the separate easy-benign slice remains outstanding.
+
+### 2026-09-28: measure fp32 ONNX directly and prepare Kaggle input
+
+Added `export_onnx predict --onnx ... --name stage_b_onnx`, retaining the
+existing `--int8` path and separate output filenames. Both variants now use
+shared warmed-up batch-one timing, including tokenization, forward inference,
+and softmax; the previous ONNX timer measured forward inference alone despite
+the documented end-to-end protocol. Latency summaries now have sidecars for
+both ONNX variants. The full local script includes fp32 ONNX and its pre-check
+variant alongside PyTorch and int8.
+
+Ran the existing fp32 ONNX graph on all four splits locally. Maximum absolute
+logit error versus saved PyTorch logits was 0.000029 across those splits.
+Reported accuracy is unchanged, including test recall 97.87%, benign escalation
+7.66%, OOD recall 85.12%, and evasion recall 71.81% without / 96.81% with the
+pre-check. Test median latency measured 62.1 ms versus the existing PyTorch
+measurement of 92.9 ms; these are separate runs on the same local machine,
+not a simultaneous controlled benchmark. No new quantization selection or
+training was performed.
+Refreshed int8 prediction/timing on the existing graph as well: test median
+latency is 22.9 ms under the corrected end-to-end timing protocol.
+
+Generated the documented 300-row easy-benign slice and teacher input locally,
+without appending to test yet. Both teachers currently cover 0/300 new ids;
+CUDA is unavailable here. `docs/KAGGLE_EASY_BENIGN.md` contains the next user
+step: score those inputs with both teachers on Kaggle and return the two
+parquets. Then merge, append the saved slice once, and regenerate comparable
+test results for every model. Existing test remains 286 rows in the meantime.

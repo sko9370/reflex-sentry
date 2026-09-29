@@ -216,6 +216,22 @@ calibration reference. The generated dictionary stays out of Git;
 see `reflex_sentry/models/data/README.md` for custom paths and reproducibility.
 Missing or empty dictionaries raise an explicit setup error.
 
+To evaluate the fp32 ONNX export directly, without repeating export or the
+quantization sweep, use:
+
+```bash
+python -m reflex_sentry.models.export_onnx predict --model models/stage_b \
+    --onnx models/stage_b/model.onnx --name stage_b_onnx \
+    --splits val test test_ood test_evasion
+python -m reflex_sentry.eval.run_all --models stage_b_onnx --precheck --config configs/eval.yaml
+```
+
+This adds `stage_b_onnx` and `stage_b_onnx_pc` rows without replacing the
+PyTorch or int8 predictions. ONNX latency includes tokenization, inference,
+and softmax using the same warmed-up, batch-one protocol as the other models.
+Both ONNX variants write their timing protocol and pooled samples' summary
+to `preds/<name>_latency.json`.
+
 The pre-check was developed after observing the base model's evasion failures,
 so its results are a post-hoc refinement, not an untouched holdout result.
 Detector thresholds were held fixed during this continuation. The English-word

@@ -29,7 +29,6 @@ import dataclasses
 import json
 import math
 import os
-import random
 import shutil
 import tempfile
 import time
@@ -41,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from reflex_sentry.models import stage_b as SB
+from reflex_sentry.eval import latency as L
 
 try:  # pragma: no cover
     import torch
@@ -315,21 +315,16 @@ def _ort_logits(sess: "ort.InferenceSession", tokenizer, texts: list[str], max_l
 
 def _ort_latency_ms(sess: "ort.InferenceSession", tokenizer, texts: list[str], max_len: int,
                      sample_size: int) -> dict[int, float]:
-    idx = list(range(len(texts)))
-    rng = random.Random(0)
-    sample = idx if len(idx) <= sample_size else rng.sample(idx, sample_size)
-    out: dict[int, float] = {}
-    for i in sample:
-        enc = tokenizer([texts[i]], truncation=True, max_length=max_len, padding=True, return_tensors="np")
+    """Single-prompt CPU timing, including tokenization, forward, and softmax."""
+    def infer(batch: list[str]) -> np.ndarray:
+        enc = tokenizer(batch, truncation=True, max_length=max_len, padding=True, return_tensors="np")
         feed = {
             "input_ids": enc["input_ids"].astype(np.int64),
             "attention_mask": enc["attention_mask"].astype(np.int64),
         }
-        t0 = time.perf_counter()
-        sess.run(["logits"], feed)
-        t1 = time.perf_counter()
-        out[i] = (t1 - t0) * 1000.0
-    return out
+        return SB._softmax(sess.run(["logits"], feed)[0])
+
+    return L.time_per_prompt(infer, texts, sample_size=sample_size)
 
 
 # ------------------------------------------------------------------ parity --
@@ -809,9 +804,10 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Pat
 
 # ---------------------------------------------------------------- predict --
 
-def predict_int8_split(int8_path: str | Path, tokenizer, metadata: dict, split: str, data_dir: str | Path,
-                        out_dir: str | Path, latency_threads: int = 1, batch_size: int = 32,
-                        latency_sample: int = 200, bulk_threads: int = 0) -> Path | None:
+def predict_onnx_split(onnx_path: str | Path, tokenizer, metadata: dict, split: str, data_dir: str | Path,
+                       out_dir: str | Path, name: str = "stage_b_onnx", latency_threads: int = 1,
+                       batch_size: int = 32, latency_sample: int = 200, bulk_threads: int = 0,
+                       latency_sink: list[float] | None = None) -> Path | None:
     """Two sessions on purpose: a bulk session (`bulk_threads`, 0 = onnxruntime
     default = all cores) scores every row in batches for the logits, and a
     separate `latency_threads` (default 1) session times only the sampled
@@ -828,15 +824,17 @@ def predict_int8_split(int8_path: str | Path, tokenizer, metadata: dict, split: 
     texts = df["text"].tolist()
 
     t0 = time.perf_counter()
-    bulk_sess = _ort_session(int8_path, intra_op_num_threads=bulk_threads)
+    bulk_sess = _ort_session(onnx_path, intra_op_num_threads=bulk_threads)
     logits = _ort_logits(bulk_sess, tokenizer, texts, max_len, batch_size=batch_size)
     t_bulk = time.perf_counter() - t0
     print(f"[export_onnx predict] {split}: scored {len(texts)} rows in {t_bulk:.1f}s "
           f"(bulk, intra_op_num_threads={bulk_threads})")
 
     t0 = time.perf_counter()
-    latency_sess = _ort_session(int8_path, intra_op_num_threads=latency_threads)
+    latency_sess = _ort_session(onnx_path, intra_op_num_threads=latency_threads)
     latencies = _ort_latency_ms(latency_sess, tokenizer, texts, max_len, latency_sample)
+    if latency_sink is not None:
+        latency_sink.extend(latencies.values())
     t_lat = time.perf_counter() - t0
     print(f"[export_onnx predict] {split}: timed {len(latencies)} prompts at batch 1 in {t_lat:.1f}s "
           f"(intra_op_num_threads={latency_threads})")
@@ -854,21 +852,39 @@ def predict_int8_split(int8_path: str | Path, tokenizer, metadata: dict, split: 
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"stage_b_int8_{split}_logits.csv"
+    out_path = out_dir / f"{name}_{split}_logits.csv"
     out.to_csv(out_path, index=False)
     print(f"[export_onnx predict] wrote {out_path} ({len(out)} rows)")
     return out_path
 
 
-def predict_int8(model_dir: str | Path, int8_path: str | Path, splits: list[str],
-                  data_dir: str | Path = "data/processed", out_dir: str | Path = "preds",
-                  latency_threads: int = 1, batch_size: int = 32, latency_sample: int = 200,
-                  bulk_threads: int = 0) -> list[Path]:
+def predict_int8_split(int8_path: str | Path, tokenizer, metadata: dict, split: str, data_dir: str | Path,
+                       out_dir: str | Path, latency_threads: int = 1, batch_size: int = 32,
+                       latency_sample: int = 200, bulk_threads: int = 0,
+                       latency_sink: list[float] | None = None) -> Path | None:
+    """Compatibility wrapper for callers of the original int8 split predictor."""
+    return predict_onnx_split(int8_path, tokenizer, metadata, split, data_dir, out_dir, name="stage_b_int8",
+                              latency_threads=latency_threads, batch_size=batch_size,
+                              latency_sample=latency_sample, bulk_threads=bulk_threads,
+                              latency_sink=latency_sink)
+
+
+def predict_int8(model_dir: str | Path, int8_path: str | Path | None = None,
+                 splits: list[str] | None = None, data_dir: str | Path = "data/processed",
+                 out_dir: str | Path = "preds", latency_threads: int = 1,
+                 batch_size: int = 32, latency_sample: int = 200, bulk_threads: int = 0,
+                 *, onnx_path: str | Path | None = None, name: str | None = None) -> list[Path]:
     """onnxruntime CPU predictor. Logits come from a bulk session using
     `bulk_threads` (0 = all cores); `latency_ms` comes from a separate session
     with `latency_threads` (default 1, mimicking a single-core gate, README's
     CPU-latency framing) at batch size 1. Raising `latency_threads` changes
     the latency story, not the logits."""
+    if (int8_path is None) == (onnx_path is None):
+        raise ValueError("provide exactly one of int8_path or onnx_path")
+    model_path = int8_path if int8_path is not None else onnx_path
+    name = name or ("stage_b_int8" if int8_path is not None else "stage_b_onnx")
+    if not name or not all(c.isalnum() or c == "_" for c in name):
+        raise ValueError("name must contain only letters, digits, or underscores")
     _require_ort()
     from transformers import AutoTokenizer
 
@@ -879,12 +895,18 @@ def predict_int8(model_dir: str | Path, int8_path: str | Path, splits: list[str]
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
     written = []
-    for split in splits:
-        p = predict_int8_split(int8_path, tokenizer, metadata, split, data_dir, out_dir,
-                                latency_threads=latency_threads, batch_size=batch_size,
-                                latency_sample=latency_sample, bulk_threads=bulk_threads)
+    latency_values: list[float] = []
+    for split in splits or []:
+        p = predict_onnx_split(model_path, tokenizer, metadata, split, data_dir, out_dir, name=name,
+                               latency_threads=latency_threads, batch_size=batch_size,
+                               latency_sample=latency_sample, bulk_threads=bulk_threads,
+                               latency_sink=latency_values)
         if p is not None:
             written.append(p)
+    if written:
+        sidecar = Path(out_dir) / f"{name}_latency.json"
+        L.write_sidecar(sidecar, latency_values, threads=latency_threads, sample_size=latency_sample)
+        print(f"[export_onnx predict] wrote latency sidecar to {sidecar}")
     return written
 
 
@@ -949,9 +971,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sw.add_argument("--min-matched-agreement", type=float, default=MIN_MATCHED_AGREEMENT)
     sw.add_argument("--max-ap-drop", type=float, default=MAX_AP_DROP)
 
-    p = sub.add_parser("predict", help="onnxruntime CPU predictor for the int8 model")
+    p = sub.add_parser("predict", help="onnxruntime CPU predictor for an int8 or fp32 ONNX model")
     p.add_argument("--model", required=True, help="dir with tokenizer + metadata.json")
-    p.add_argument("--int8", required=True)
+    paths = p.add_mutually_exclusive_group(required=True)
+    paths.add_argument("--int8", help="dynamic int8 ONNX graph")
+    paths.add_argument("--onnx", help="fp32 ONNX graph")
+    p.add_argument("--name", default=None, help="full artifact prefix (default: stage_b_int8 or stage_b_onnx)")
     p.add_argument("--splits", nargs="+", default=["val", "test", "test_ood", "test_evasion"])
     p.add_argument("--data-dir", default="data/processed")
     p.add_argument("--out-dir", default="preds")
@@ -990,7 +1015,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "predict":
         predict_int8(args.model, args.int8, args.splits, data_dir=args.data_dir, out_dir=args.out_dir,
                      latency_threads=args.latency_threads, latency_sample=args.latency_sample,
-                     bulk_threads=args.bulk_threads)
+                     bulk_threads=args.bulk_threads, onnx_path=args.onnx, name=args.name)
 
 
 if __name__ == "__main__":

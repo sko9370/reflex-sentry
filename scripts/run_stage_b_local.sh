@@ -9,8 +9,8 @@ set -euo pipefail
 # val for temperature scaling and threshold selection, never model-config
 # selection) at a matched escalation rate, and keeps the best passing one as
 # model_int8.onnx; writes an informational (non-gating) fp32-vs-int8 parity
-# report on val; runs the int8 CPU predictor on every split that exists
-# locally; then hands off to the shared eval harness for both variants.
+# report on val; runs both fp32 ONNX and int8 CPU predictors on every split
+# that exists locally; then hands off to the shared eval harness.
 #
 #   bash scripts/run_stage_b_local.sh
 #
@@ -77,7 +77,7 @@ python3 -m reflex_sentry.models.export_onnx sweep \
     --bulk-threads "$BULK_THREADS" --chosen-path "$INT8_PATH" --choose && INT8_OK=1 || {
     INT8_OK=0
     echo "WARNING: no int8 config passed the matched-rate pass rule (see $MODEL_DIR/sweep.md)." >&2
-    echo "         Skipping int8; the fp32 stage_b row is still produced." >&2
+    echo "         Skipping int8; the fp32 PyTorch and ONNX rows are still produced." >&2
     # Remove stale int8 artifacts so an old model cannot leak into the table.
     rm -f "$INT8_PATH" "$PREDS_DIR"/stage_b_int8_*_logits.csv "$PREDS_DIR"/stage_b_int8_*.csv
     rm -f "$PREDS_DIR"/stage_b_int8_pc_*.csv
@@ -103,14 +103,21 @@ if [ "$INT8_OK" = 1 ]; then
         --bulk-threads "$BULK_THREADS" --latency-sample "$LATENCY_SAMPLE"
 fi
 
+echo "== fp32 ONNX CPU predict on: $SPLITS =="
+# shellcheck disable=SC2086
+python3 -m reflex_sentry.models.export_onnx predict \
+    --model "$MODEL_DIR" --onnx "$ONNX_PATH" --name stage_b_onnx --splits $SPLITS \
+    --data-dir "$DATA_DIR" --out-dir "$PREDS_DIR" --latency-threads "$INTRA_OP_THREADS" \
+    --bulk-threads "$BULK_THREADS" --latency-sample "$LATENCY_SAMPLE"
+
 echo "== fp32 CPU predict on: $SPLITS (for the stage_b row in the comparison table) =="
 # shellcheck disable=SC2086
 python3 -m reflex_sentry.models.stage_b predict \
     --model "$MODEL_DIR" --splits $SPLITS --data-dir "$DATA_DIR" --out-dir "$PREDS_DIR" \
     --device cpu --latency-threads "$INTRA_OP_THREADS" --latency-sample "$LATENCY_SAMPLE"
 
-echo "== scoring both variants with the shared eval harness =="
-if [ "$INT8_OK" = 1 ]; then MODELS="stage_b stage_b_int8"; else MODELS="stage_b"; fi
+echo "== scoring CPU variants with the shared eval harness =="
+if [ "$INT8_OK" = 1 ]; then MODELS="stage_b stage_b_onnx stage_b_int8"; else MODELS="stage_b stage_b_onnx"; fi
 # shellcheck disable=SC2086
 python3 -m reflex_sentry.eval.run_all --models $MODELS --precheck \
     --processed-dir "$DATA_DIR" --preds-dir "$PREDS_DIR" --reports-dir "$REPORTS_DIR" \
@@ -118,4 +125,5 @@ python3 -m reflex_sentry.eval.run_all --models $MODELS --precheck \
 
 echo
 echo "done. fp32 logits:  ${PREDS_DIR}/stage_b_<split>_logits.csv"
+echo "      ONNX logits:  ${PREDS_DIR}/stage_b_onnx_<split>_logits.csv"
 echo "      int8 logits:  ${PREDS_DIR}/stage_b_int8_<split>_logits.csv"

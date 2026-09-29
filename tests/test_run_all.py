@@ -148,11 +148,34 @@ def test_discover_reported_models_sorts_pc_variant_after_its_base(tmp_path):
     # ahead of the next known model.
     from reflex_sentry.eval.run_all import discover_reported_models
 
-    for d in ["stage_b_int8_test", "stage_b_pc_test", "stage_b_test", "stage_a_test", "keyword_val"]:
+    for d in ["stage_b_int8_pc_test", "stage_b_int8_test", "stage_b_onnx_pc_test",
+              "stage_b_onnx_test", "stage_b_pc_test", "stage_b_test", "stage_a_test", "keyword_val"]:
         (tmp_path / d).mkdir()
         (tmp_path / d / "metrics.json").write_text("{}")
     assert discover_reported_models(tmp_path) == [
-        "keyword", "stage_a", "stage_b", "stage_b_pc", "stage_b_int8"]
+        "keyword", "stage_a", "stage_b", "stage_b_pc", "stage_b_onnx",
+        "stage_b_onnx_pc", "stage_b_int8", "stage_b_int8_pc"]
+
+
+def test_run_all_reports_onnx_and_precheck_with_base_params(workspace, monkeypatch):
+    for split, seed in (("val", 60), ("test", 61)):
+        _make_logits(6, seed, split).to_csv(
+            workspace["preds"] / f"stage_b_onnx_{split}_logits.csv", index=False)
+    model_dir = workspace["models"] / "stage_b"
+    model_dir.mkdir()
+    (model_dir / "metadata.json").write_text('{"params": 4321}')
+    monkeypatch.setattr(PC, "COMMON_WORDS", frozenset({"synthetic"}))
+    monkeypatch.setattr(PC, "precheck", lambda text: (False, []))
+
+    table = RA.run(["stage_b_onnx"], processed_dir=workspace["processed"],
+                   preds_dir=workspace["preds"], reports_dir=workspace["reports"],
+                   models_dir=workspace["models"], precheck=True, splits=["val", "test"])
+
+    assert table["Model"].tolist() == ["stage_b_onnx", "stage_b_onnx_pc"]
+    assert table["Params"].tolist() == [4321, 4321]
+    assert (table["AP"] != "n/a").all()
+    assert (workspace["reports"] / "stage_b_onnx_pc_test" / "metrics.json").exists()
+    assert RA._params_for("stage_b_int8_pc", workspace["models"]) == 4321
 
 
 def test_run_all_scores_a_model_with_predictions_but_no_logits(workspace):

@@ -386,6 +386,85 @@ def test_export_onnx_int8_parity(tiny_export):
     assert expected_cols <= set(df.columns)
     assert df["latency_ms"].notna().sum() == 5  # only the sampled rows are timed
     assert written[0].name == "stage_b_int8_val_logits.csv"
+    assert json.loads((preds_dir / "stage_b_int8_latency.json").read_text())["n"] == 5
+
+
+def test_predict_fp32_onnx_is_isolated_and_matches_torch(tiny_export):
+    from reflex_sentry.models import export_onnx as EX
+
+    model_dir = tiny_export["model_dir"]
+    preds_dir = tiny_export["root"] / "fp32_preds"
+    kwargs = {"data_dir": tiny_export["data_dir"], "out_dir": preds_dir,
+              "latency_sample": 4, "latency_threads": 1}
+    fp32_files = EX.predict_int8(model_dir, splits=["val"], onnx_path=tiny_export["onnx"], **kwargs)
+    assert [p.name for p in fp32_files] == ["stage_b_onnx_val_logits.csv"]
+    fp32 = pd.read_csv(fp32_files[0])
+
+    student, tokenizer, metadata = SB.load_student(model_dir, device="cpu")
+    texts = pd.read_parquet(tiny_export["val"])["text"].tolist()
+    expected = SB.infer_logits(student, tokenizer, texts, int(metadata["max_len"]), "cpu")
+    np.testing.assert_allclose(fp32[["logit_safe", "logit_dangerous", "logit_unsure"]].to_numpy(),
+                               expected, atol=1e-3, rtol=1e-3)
+    assert fp32["latency_ms"].notna().sum() == 4
+    sidecar = json.loads((preds_dir / "stage_b_onnx_latency.json").read_text())
+    assert sidecar["n"] == 4
+    assert sidecar["latency_protocol"] == {
+        "threads": 1, "batch": 1, "sample_size": 4, "includes_tokenization": True,
+    }
+    assert sidecar["p50_ms"] > 0
+
+    int8_path = EX.quantize_int8(tiny_export["onnx"], tiny_export["root"] / "predict_int8.onnx")
+    int8_files = EX.predict_int8(model_dir, int8_path, ["val"], **kwargs)
+    assert [p.name for p in int8_files] == ["stage_b_int8_val_logits.csv"]
+    assert fp32_files[0].exists()  # the second prediction did not overwrite fp32
+    assert (preds_dir / "stage_b_onnx_latency.json").exists()
+    assert (preds_dir / "stage_b_int8_latency.json").exists()
+
+
+def test_predict_onnx_cli_paths_are_exclusive():
+    from reflex_sentry.models import export_onnx as EX
+
+    with pytest.raises(SystemExit):
+        EX._build_parser().parse_args(["predict", "--model", "m", "--onnx", "a.onnx",
+                                        "--int8", "b.onnx"])
+    with pytest.raises(ValueError, match="exactly one"):
+        EX.predict_int8("m", "b.onnx", ["val"], onnx_path="a.onnx")
+
+
+def test_onnx_latency_times_tokenization_forward_and_softmax(monkeypatch):
+    from reflex_sentry.models import export_onnx as EX
+
+    clock = [0.0]
+    events = []
+
+    def tokenizer(batch, **kwargs):
+        assert len(batch) == 1
+        events.append(("tokenize", batch[0]))
+        clock[0] += 0.002
+        return {"input_ids": np.ones((1, 2), dtype=np.int64),
+                "attention_mask": np.ones((1, 2), dtype=np.int64)}
+
+    class Session:
+        def run(self, outputs, feed):
+            assert outputs == ["logits"] and feed["input_ids"].shape == (1, 2)
+            events.append(("forward", None))
+            clock[0] += 0.003
+            return [np.array([[1.0, 0.0, -1.0]], dtype=np.float32)]
+
+    def softmax(logits):
+        assert logits.shape == (1, 3)
+        events.append(("softmax", None))
+        clock[0] += 0.005
+        return np.array([[0.7, 0.2, 0.1]])
+
+    monkeypatch.setattr(EX.L.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(EX.SB, "_softmax", softmax)
+    times = EX._ort_latency_ms(Session(), tokenizer, ["a", "b", "c"], max_len=16, sample_size=2)
+
+    assert set(times) == {1, 2}  # shared helper's deterministic seed-0 sample
+    assert list(times.values()) == pytest.approx([10.0, 10.0])
+    assert len(events) == 7 * 3  # five warmups plus two measured prompts
+    assert [kind for kind, _ in events] == ["tokenize", "forward", "softmax"] * 7
 
 
 def test_parity_metrics_identical_models():

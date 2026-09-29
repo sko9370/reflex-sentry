@@ -145,9 +145,12 @@ def _read_metrics(reports_dir: Path, model: str, split: str) -> dict | None:
 def _params_for(model: str, models_dir: Path):
     if model == "keyword":
         return 0
-    # The pre-check and int8 export add no trainable parameters.
+    # Pre-check, fp32 ONNX, and int8 exports share the trained base parameters.
     base = model[: -len("_pc")] if model.endswith("_pc") else model
-    base = base[: -len("_int8")] if base.endswith("_int8") else base
+    for suffix in ("_int8", "_onnx"):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+            break
     meta_path = models_dir / base / "metadata.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
@@ -155,7 +158,7 @@ def _params_for(model: str, models_dir: Path):
     return "n/a"
 
 
-MODEL_ORDER = ("keyword", "stage_a", "stage_b", "stage_b_int8")
+MODEL_ORDER = ("keyword", "stage_a", "stage_b", "stage_b_onnx", "stage_b_int8")
 
 
 def _model_order_key(m: str) -> tuple:
