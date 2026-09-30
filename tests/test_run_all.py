@@ -190,7 +190,9 @@ def test_run_all_scores_a_model_with_predictions_but_no_logits(workspace):
     preds["p_unsure"] = 1 - preds["p_safe"] - preds["p_dangerous"]
     preds["latency_ms"] = 1.0
     preds.to_csv(workspace["preds"] / "stage_b_pc_val.csv", index=False)
-    preds.to_csv(workspace["preds"] / "stage_b_pc_test.csv", index=False)
+    test_preds = preds.copy()
+    test_preds["id"] = test_preds["id"].str.replace("val:", "test:", regex=False)
+    test_preds.to_csv(workspace["preds"] / "stage_b_pc_test.csv", index=False)
 
     assert not (workspace["preds"] / "stage_b_pc_val_logits.csv").exists()
 
@@ -202,6 +204,43 @@ def test_run_all_scores_a_model_with_predictions_but_no_logits(workspace):
     row = table.iloc[0]
     assert row["Model"] == "stage_b_pc"
     assert row["AP"] != "n/a"
+
+
+@pytest.mark.parametrize("problem,expected", [
+    ("missing", "1 missing, 0 extra"),
+    ("extra", "0 missing, 1 extra"),
+    ("duplicate", "duplicate IDs"),
+    ("null", "null IDs"),
+])
+def test_report_model_rejects_invalid_prediction_ids(workspace, problem, expected):
+    gold = pd.read_parquet(workspace["processed"] / "val.parquet")
+    preds = gold[["id"]].copy()
+    if problem == "missing":
+        preds = preds.iloc[1:]
+    elif problem == "extra":
+        preds.loc[len(preds)] = "unseen:id"
+    elif problem == "duplicate":
+        preds.loc[1, "id"] = preds.loc[0, "id"]
+    else:
+        preds.loc[0, "id"] = None
+    preds.to_csv(workspace["preds"] / "toy_val.csv", index=False)
+
+    with pytest.raises(ValueError, match=expected):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["val"])
+    assert not (workspace["reports"] / "toy_val").exists()
+
+
+def test_report_model_checks_threshold_only_val_ids(workspace):
+    val = pd.read_parquet(workspace["processed"] / "val.parquet")
+    test = pd.read_parquet(workspace["processed"] / "test.parquet")
+    val[["id"]].iloc[1:].to_csv(workspace["preds"] / "toy_val.csv", index=False)
+    test[["id"]].to_csv(workspace["preds"] / "toy_test.csv", index=False)
+
+    with pytest.raises(ValueError, match="1 missing, 0 extra"):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test"])
+    assert not (workspace["reports"] / "toy_test").exists()
 
 
 def test_run_all_precheck_uses_fresh_calibrated_predictions(workspace, monkeypatch):

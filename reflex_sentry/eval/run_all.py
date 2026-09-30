@@ -96,11 +96,28 @@ def calibrate_model(model: str, preds_dir: Path, splits: Sequence[str] = SPLITS)
     return True
 
 
+def _validate_prediction_ids(gold_path: Path, preds_path: Path) -> None:
+    """Require one prediction for every gold row in the same split."""
+    gold_ids = pd.read_parquet(gold_path, columns=["id"])["id"]
+    pred_ids = pd.read_csv(preds_path, usecols=["id"], dtype={"id": "string"})["id"]
+    gold_ids = gold_ids.astype("string")
+    for label, path, ids in (("gold", gold_path, gold_ids), ("predictions", preds_path, pred_ids)):
+        if ids.isna().any():
+            raise ValueError(f"{label} in {path} contain null IDs")
+        if ids.duplicated().any():
+            raise ValueError(f"{label} in {path} contain duplicate IDs")
+    missing = len(set(gold_ids) - set(pred_ids))
+    extra = len(set(pred_ids) - set(gold_ids))
+    if missing or extra:
+        raise ValueError(f"{preds_path} IDs do not match {gold_path}: {missing} missing, {extra} extra")
+
+
 def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: Path,
                   config: str | None, splits: Sequence[str] = SPLITS) -> dict:
     results: dict = {}
     val_preds = preds_dir / f"{model}_val.csv"
     val_arg = str(val_preds) if val_preds.exists() else None
+    reportable = []
     for split in SPLITS:
         gold_path = processed_dir / f"{split}.parquet"
         preds_path = preds_dir / f"{model}_{split}.csv"
@@ -110,6 +127,16 @@ def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: 
             # cannot describe the model/split set requested in this run.
             shutil.rmtree(out_dir, ignore_errors=True)
             continue
+        reportable.append((split, gold_path, preds_path, out_dir))
+    # Validate every input before writing any report, including validation
+    # predictions used only to select the threshold for another split.
+    if reportable and val_arg and not any(split == "val" for split, *_ in reportable):
+        val_gold = processed_dir / "val.parquet"
+        if val_gold.exists():
+            _validate_prediction_ids(val_gold, val_preds)
+    for _, gold_path, preds_path, _ in reportable:
+        _validate_prediction_ids(gold_path, preds_path)
+    for split, _, preds_path, out_dir in reportable:
         results[split] = R.run(str(preds_path), str(out_dir), val=val_arg, config=config)
     return results
 

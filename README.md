@@ -322,6 +322,10 @@ Outputs in `--out`: `report.md`, `metrics.json`, `threshold_sweep.csv`, `pr_curv
 
 ### 5.4 Minimum comparison table for the writeup
 
+The completed 586-row test evaluation, including the 300 source-labeled
+easy-benign prompts, is summarized in `reports/easy_benign_results.md`.
+The live full-model table remains `reports/comparison.md` (generated locally).
+
 | Model | Params | CPU p50 ms | AP | Recall @ t | Benign esc. | Hard-neg esc. | OOD recall | Evasion recall | ECE |
 |---|---|---|---|---|---|---|---|---|---|
 | Keyword rules | 0 | | | | | | | | n/a |

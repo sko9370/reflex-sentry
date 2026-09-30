@@ -370,3 +370,34 @@ CUDA is unavailable here. `docs/KAGGLE_EASY_BENIGN.md` contains the next user
 step: score those inputs with both teachers on Kaggle and return the two
 parquets. Then merge, append the saved slice once, and regenerate comparable
 test results for every model. Existing test remains 286 rows in the meantime.
+
+### 2026-09-29: easy-benign teacher scores merged and all test predictions refreshed
+
+Validated both returned Kaggle files against all 300 expected unique ids,
+model identities, and probability bounds. Each main teacher file now has
+6,497 unique rows; backups retain the original 6,197 rows. Appended the saved
+slice once, producing test counts of 509 benign, 47 dangerous, 30 ambiguous
+(586 total). Validation, OOD, evasion, models, and detector thresholds were
+not changed. Refreshed local keyword, Stage A, PyTorch Stage B, fp32 ONNX,
+int8 ONNX, and combined teacher predictions, then all pre-check variants.
+
+All nine comparison rows now cover exactly the same 586 ids and gold labels.
+Validation thresholds and dangerous recall are unchanged. The new benign
+slice escalates 39/300 for fp32 Stage B, 62/300 for int8, 162/300 for Stage A,
+and 7/300 for the combined teachers. These prompts are not easy for the
+students. Pre-check flags one new benign row that was already escalated,
+so operating-point counts are unchanged, but its forced score hurts AP.
+AP also changes with the larger benign class share; do not compare old/new
+AP as if class prevalence were fixed. The 300 source-derived benign labels
+remain unchanged despite 19 rows receiving unsafe >=0.5 from either teacher.
+
+`reports/easy_benign_results.md` records slice counts, limitations, and
+scenario economics under configs/eval.yaml. Old cost reports did not all use
+the same benign-mixture assumptions and had only one easy-benign row, so
+old/new costs are not a controlled comparison. Timings were refreshed on
+the expanded test sample; a different prompt mix is not a model speedup.
+
+Added an evaluator guard against stale or partial predictions: required ids
+must match each gold split exactly, with no duplicate/null ids. Validation
+predictions used just for thresholds are checked too. Full suite: 296 passed,
+3 skipped. No further Kaggle run is needed for this evaluation.

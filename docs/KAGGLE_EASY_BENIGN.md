@@ -1,10 +1,16 @@
 # Score the 300 easy-benign prompts
 
+**Completed 2026-09-29:** both outputs were returned and validated, merged
+into the main score files, and the slice was appended to test. All model
+test predictions and comparisons were refreshed. See
+`reports/easy_benign_results.md` for the findings. The procedure below is
+retained for reproducibility; no repeat Kaggle run is needed.
+
 Local input is ready at `data/processed/easy_benign_for_teachers.parquet`.
 It contains 300 selected ToxicChat prompts; neither existing teacher score
 file contains these ids. The paired gold slice is
-`data/processed/test_easy_benign.parquet`. It has not yet been appended to
-`test.parquet`, so the current comparison still uses the same test population
+`data/processed/test_easy_benign.parquet`. It had not yet been appended to
+`test.parquet` at preparation time, so that comparison used the same test population
 for all models.
 
 1. Add `easy_benign_for_teachers.parquet` to the private Kaggle dataset used
