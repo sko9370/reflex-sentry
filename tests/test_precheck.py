@@ -287,7 +287,7 @@ def apply_workspace(tmp_path):
     return {"processed": processed, "preds": preds}
 
 
-def test_apply_precheck_output_schema_and_override(apply_workspace):
+def test_apply_precheck_output_schema_and_preserves_probabilities(apply_workspace):
     written = P.apply_precheck("stage_b", splits=["val"], preds_dir=apply_workspace["preds"],
                                 processed_dir=apply_workspace["processed"])
     assert "val" in written
@@ -296,23 +296,24 @@ def test_apply_precheck_output_schema_and_override(apply_workspace):
     out = pd.read_csv(out_path)
 
     required = {"id", "gold", "p_safe", "p_dangerous", "p_unsure", "latency_ms",
-                "precheck_flag", "precheck_reasons"}
+                "precheck_flag", "precheck_reasons", "force_escalate"}
     assert required.issubset(out.columns)
     assert "text" not in out.columns  # never written to the CSV
     np.testing.assert_allclose(out[["p_safe", "p_dangerous", "p_unsure"]].sum(axis=1), 1.0, atol=1e-6)
 
     flagged = out[out["precheck_flag"]]
     assert len(flagged) > 0
-    assert (flagged["p_safe"] == P.FLAGGED_P_SAFE).all()
-    assert (flagged["p_dangerous"] == P.FLAGGED_P_DANGEROUS).all()
-    assert (flagged["p_unsure"] == P.FLAGGED_P_UNSURE).all()
+    assert out["force_escalate"].equals(out["precheck_flag"])
     assert (flagged["precheck_reasons"].str.len() > 0).all()
 
     unflagged = out[~out["precheck_flag"]]
-    # unflagged rows keep the base model's probabilities untouched
+    # Every row, including flagged benign and dangerous rows, keeps the base
+    # model's calibrated probabilities untouched.
     base = pd.read_csv(apply_workspace["preds"] / "stage_b_val.csv").set_index("id")
+    for _, row in out.iterrows():
+        np.testing.assert_allclose(row[["p_safe", "p_dangerous", "p_unsure"]].to_numpy(dtype=float),
+                                   base.loc[row["id"], ["p_safe", "p_dangerous", "p_unsure"]].to_numpy(dtype=float))
     for _, row in unflagged.iterrows():
-        assert row["p_safe"] == pytest.approx(base.loc[row["id"], "p_safe"])
         assert pd.isna(row["precheck_reasons"]) or row["precheck_reasons"] == ""
 
     # latency_ms is base latency plus a nonnegative measured precheck time
@@ -381,7 +382,7 @@ def test_flagged_precheck_never_reverses_base_escalation(apply_workspace, thresh
     out = pd.read_csv(apply_workspace["preds"] / "stage_b_pc_val.csv")
     flagged = out["precheck_flag"]
     assert flagged.any()
-    assert (out.loc[flagged, "p_safe"] < threshold).all()
+    assert out.loc[flagged, "force_escalate"].all()
     base_escalated = base["p_safe"] < threshold
     assert (out.loc[flagged & base_escalated, "p_safe"] < threshold).all()
 

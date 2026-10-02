@@ -293,10 +293,9 @@ def test_run_all_precheck_uses_fresh_calibrated_predictions(workspace, monkeypat
         assert pc["id"].tolist() == base["id"].tolist()
         flagged = pc["precheck_flag"].astype(bool)
         assert flagged.any() and (~flagged).any()
-        assert np.allclose(pc.loc[~flagged, ["p_safe", "p_dangerous", "p_unsure"]],
-                           base.loc[~flagged, ["p_safe", "p_dangerous", "p_unsure"]])
-        assert (pc.loc[flagged, "p_safe"] == 0).all()
-        assert (pc.loc[flagged, "p_unsure"] == 1).all()
+        assert np.allclose(pc[["p_safe", "p_dangerous", "p_unsure"]],
+                           base[["p_safe", "p_dangerous", "p_unsure"]])
+        assert pc["force_escalate"].astype(bool).equals(flagged)
         assert (workspace["reports"] / f"stage_b_pc_{split}" / "metrics.json").exists()
     assert not (workspace["preds"] / "stage_b_pc_val_logits.csv").exists()
     assert not (workspace["preds"] / "stage_b_pc_test_ood.csv").exists()

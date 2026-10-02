@@ -285,7 +285,11 @@ def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
     table = build_comparison(table_models, processed_dir, preds_dir, reports_dir, models_dir)
     table.to_csv(reports_dir / "comparison.csv", index=False)
     (reports_dir / "comparison.md").write_text(
-        "# Model comparison\n\n" + table.to_markdown(index=False) + "\n")
+        "# Model comparison\n\n"
+        "AP and ECE measure base model probabilities. Recall and escalation rates "
+        "at the frozen threshold include any forced policy escalations; the threshold "
+        "itself is selected from base model validation scores.\n\n"
+        + table.to_markdown(index=False) + "\n")
     return table
 
 

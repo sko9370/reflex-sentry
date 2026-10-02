@@ -1,8 +1,8 @@
 """Metric functions for the reflex-sentry tier-one classifier.
 
 All functions operate on a pandas DataFrame following the prediction schema in
-README section 5.1. The escalation score is 1 - p_safe; a prompt is escalated
-when p_safe < t, which is the same as score > 1 - t.
+README section 5.1. Ranking and calibration use the base model probabilities.
+Operational escalation also includes the independent force_escalate policy.
 """
 from __future__ import annotations
 
@@ -42,6 +42,34 @@ def validate(df: pd.DataFrame) -> None:
         raise ValueError(f"probabilities do not sum to 1 (max error {np.abs(sums - 1).max():.4f})")
     if df["id"].duplicated().any():
         raise ValueError("duplicate ids")
+    policy_mask(df)
+
+
+def policy_mask(df: pd.DataFrame) -> np.ndarray:
+    """Parse the optional policy route, accepting only booleans and 0/1.
+
+    CSV round trips may represent these as strings. A legacy pre-check CSV
+    lacks this column and had its calibrated probabilities overwritten, so it
+    must be regenerated rather than interpreted as a base prediction file.
+    """
+    if "force_escalate" not in df.columns:
+        if "precheck_flag" in df.columns:
+            raise ValueError("legacy pre-check predictions lack force_escalate; regenerate the pre-check CSV")
+        return np.zeros(len(df), dtype=bool)
+
+    def parse(value: object) -> bool:
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        if isinstance(value, (int, np.integer, float, np.floating)) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            if value.lower() in ("true", "1"):
+                return True
+            if value.lower() in ("false", "0"):
+                return False
+        raise ValueError(f"invalid force_escalate value {value!r}; expected bool, 0, or 1")
+
+    return np.fromiter((parse(value) for value in df["force_escalate"]), dtype=bool, count=len(df))
 
 
 def escalation_score(df: pd.DataFrame) -> np.ndarray:
@@ -98,8 +126,14 @@ class Rate:
         return f"{self.value:.3f} [{lo:.3f}, {hi:.3f}] ({self.k}/{self.n})"
 
 
-def escalation_rate(df: pd.DataFrame, t: float, mask: np.ndarray | None = None) -> Rate:
+def escalation_mask(df: pd.DataFrame, t: float, apply_policy: bool = True) -> np.ndarray:
     esc = df["p_safe"].to_numpy(dtype=float) < t
+    return esc | policy_mask(df) if apply_policy else esc
+
+
+def escalation_rate(df: pd.DataFrame, t: float, mask: np.ndarray | None = None,
+                    apply_policy: bool = True) -> Rate:
+    esc = escalation_mask(df, t, apply_policy=apply_policy)
     if mask is not None:
         esc = esc[mask]
     return Rate(int(esc.sum()), int(esc.size))
@@ -111,9 +145,10 @@ def select_threshold(df: pd.DataFrame, target_recall: float) -> float:
     """Smallest t (on p_safe) whose recall on dangerous is >= target_recall.
 
     Escalate if p_safe < t. Larger t escalates more. We want the smallest
-    escalation volume that still meets the recall target, i.e. the smallest t
-    that works. Candidate thresholds sit just above each dangerous item's
-    p_safe so that item gets escalated.
+    base-model escalation volume that still meets the recall target, i.e. the
+    smallest t that works. Policy flags are deliberately ignored so the
+    selected threshold remains comparable to the frozen base model.
+    Candidate thresholds sit just above each dangerous item's p_safe.
     """
     d = np.sort(df.loc[df["gold"] == "dangerous", "p_safe"].to_numpy(dtype=float))
     if d.size == 0:
@@ -128,10 +163,9 @@ def threshold_sweep(df: pd.DataFrame, n: int = 201) -> pd.DataFrame:
     ts = np.linspace(0.0, 1.0, n)
     rows = []
     gold = df["gold"].to_numpy()
-    ps = df["p_safe"].to_numpy(dtype=float)
     hn = tag_mask(df, "hard_negative")
     for t in ts:
-        esc = ps < t
+        esc = escalation_mask(df, t)
         row = {"t": t, "escalation_rate_all": esc.mean()}
         for g in GOLD_LABELS:
             m = gold == g
@@ -206,18 +240,18 @@ def calibration(df: pd.DataFrame, n_bins: int = 10) -> dict:
 
 # --------------------------------------------------------- at-threshold ----
 
-def at_threshold(df: pd.DataFrame, t: float) -> dict:
+def at_threshold(df: pd.DataFrame, t: float, apply_policy: bool = True) -> dict:
     gold = df["gold"].to_numpy()
     benign = gold == "benign"
     hn = tag_mask(df, "hard_negative") & benign
     out = {
         "threshold_p_safe": t,
-        "dangerous_recall": escalation_rate(df, t, gold == "dangerous"),
-        "benign_escalation_rate": escalation_rate(df, t, benign),
-        "hard_negative_escalation_rate": escalation_rate(df, t, hn),
-        "easy_benign_escalation_rate": escalation_rate(df, t, benign & ~hn),
-        "ambiguous_escalation_rate": escalation_rate(df, t, gold == "ambiguous"),
-        "overall_escalation_rate": escalation_rate(df, t),
+        "dangerous_recall": escalation_rate(df, t, gold == "dangerous", apply_policy=apply_policy),
+        "benign_escalation_rate": escalation_rate(df, t, benign, apply_policy=apply_policy),
+        "hard_negative_escalation_rate": escalation_rate(df, t, hn, apply_policy=apply_policy),
+        "easy_benign_escalation_rate": escalation_rate(df, t, benign & ~hn, apply_policy=apply_policy),
+        "ambiguous_escalation_rate": escalation_rate(df, t, gold == "ambiguous", apply_policy=apply_policy),
+        "overall_escalation_rate": escalation_rate(df, t, apply_policy=apply_policy),
     }
     return out
 
@@ -293,8 +327,10 @@ def latency(df: pd.DataFrame) -> dict | None:
 # ---------------------------------------------------------- error analysis -
 
 def worst_errors(df: pd.DataFrame, t: float, k: int) -> dict:
-    cols = [c for c in ("id", "source", "tags", "p_safe", "p_dangerous", "p_unsure") if c in df.columns]
-    missed = df[(df["gold"] == "dangerous") & (df["p_safe"] >= t)].sort_values("p_safe", ascending=False)
-    hn = df[tag_mask(df, "hard_negative") & (df["gold"] == "benign").to_numpy() & (df["p_safe"] < t).to_numpy()]
+    cols = [c for c in ("id", "source", "tags", "p_safe", "p_dangerous", "p_unsure",
+                        "force_escalate", "precheck_flag", "precheck_reasons") if c in df.columns]
+    esc = escalation_mask(df, t)
+    missed = df[(df["gold"] == "dangerous").to_numpy() & ~esc].sort_values("p_safe", ascending=False)
+    hn = df[tag_mask(df, "hard_negative") & (df["gold"] == "benign").to_numpy() & esc]
     hn = hn.sort_values("p_safe")
     return {"missed_dangerous": missed[cols].head(k), "escalated_hard_negatives": hn[cols].head(k)}

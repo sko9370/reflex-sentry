@@ -68,12 +68,17 @@ def plot_pr(df: pd.DataFrame, t: float, path: Path) -> None:
     if y.sum() == 0 or (1 - y).sum() == 0:
         return
     prec, rec, _ = precision_recall_curve(y, s)
-    # benign escalation rate vs recall is the operator's view of the same curve
+    # Ranking uses raw model scores. Operational decisions include policy
+    # escalations, so derive the second curve from the routed decision mask.
     ts = np.linspace(0, 1, 401)
-    ps_d = df.loc[df["gold"] == "dangerous", "p_safe"].to_numpy()
-    ps_b = df.loc[df["gold"] == "benign", "p_safe"].to_numpy()
-    recall = np.array([(ps_d < x).mean() for x in ts])
-    fpr = np.array([(ps_b < x).mean() for x in ts])
+    dangerous = (df["gold"] == "dangerous").to_numpy()
+    benign = (df["gold"] == "benign").to_numpy()
+    routed = [M.escalation_mask(df, x) for x in ts]
+    recall = np.array([esc[dangerous].mean() for esc in routed])
+    fpr = np.array([esc[benign].mean() for esc in routed])
+    base = [M.escalation_mask(df, x, apply_policy=False) for x in ts]
+    base_recall = np.array([esc[dangerous].mean() for esc in base])
+    base_fpr = np.array([esc[benign].mean() for esc in base])
     at = M.at_threshold(df, t)
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
@@ -81,21 +86,23 @@ def plot_pr(df: pd.DataFrame, t: float, path: Path) -> None:
     ax.plot(rec, prec, color="#2a6f97")
     ax.set_xlabel("Recall (dangerous)")
     ax.set_ylabel("Precision (on this eval set's mix)")
-    ax.set_title("Precision-recall")
+    ax.set_title("Model precision-recall (base scores)")
     ax.set_xlim(0, 1.01)
     ax.set_ylim(0, 1.01)
     ax.grid(alpha=0.3)
 
     ax = axes[1]
-    ax.plot(fpr, recall, color="#2a6f97")
+    ax.plot(fpr, recall, color="#2a6f97", label="Routed decisions")
+    ax.plot(base_fpr, base_recall, color="#888888", linestyle="--", alpha=0.8,
+            label="Model threshold only")
     ax.scatter([at["benign_escalation_rate"].value], [at["dangerous_recall"].value],
-               color="#c1121f", zorder=3, label=f"frozen t = {t:.3f}")
+               color="#c1121f", zorder=3, label=f"Routed at frozen t = {t:.3f}")
     ax.set_xscale("symlog", linthresh=0.01)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1.01)
     ax.set_xlabel("Benign escalation rate (log scale above 1%)")
     ax.set_ylabel("Recall (dangerous)")
-    ax.set_title("Operating tradeoff")
+    ax.set_title("Operating tradeoff (policy routed)")
     ax.grid(alpha=0.3)
     ax.legend(loc="lower right")
     fig.tight_layout()
@@ -138,13 +145,18 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
     L.append("## Threshold\n")
     if th["source"] == "val":
         L.append(f"`t = {th['t']:.4f}` chosen on `{th['val_file']}` for dangerous recall "
-                 f">= {th['target_recall']:.2f} (val recall achieved: {th['val_recall']:.3f}). "
-                 "Escalate if `p_safe < t`.\n")
+                 f">= {th['target_recall']:.2f} using base model scores "
+                 f"(base validation recall: {th['val_recall']:.3f}; "
+                 f"routed validation recall: {th['policy_val_recall']:.3f}).\n")
     else:
-        L.append(f"`t = {th['t']:.4f}` ({th['source']}). Escalate if `p_safe < t`. "
+        L.append(f"`t = {th['t']:.4f}` ({th['source']}). "
                  "No validation file was given, so treat these numbers as provisional.\n")
+    L.append("The model escalates when `p_safe < t`. A `force_escalate` policy flag also "
+             "escalates the item without changing its model probabilities. "
+             "The threshold, ranking, precision-recall plot, and calibration use base model scores; "
+             "the operating tradeoff, rates, slices, economics, and error lists use routed decisions.\n")
 
-    L.append("## At the frozen threshold (95% Wilson intervals)\n")
+    L.append("## Routed decisions at the frozen threshold (95% Wilson intervals)\n")
     L.append("| Metric | Value [95% CI] (k/n) |\n|---|---|")
     labels = {
         "dangerous_recall": "Dangerous recall",
@@ -158,8 +170,24 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
         L.append(f"| {name} | {r['_at_threshold_rates'][k].fmt()} |")
     L.append("")
 
+    route = r["routing"]
+    L.append("## Policy routing at the frozen threshold\n")
+    L.append("| Quantity | Count / total |\n|---|---|")
+    for key, label in (("policy_flags", "Flagged for forced escalation"),
+                       ("already_escalated", "Flagged and already escalated by the model"),
+                       ("new_escalations", "Additional escalations from the policy")):
+        rate = route[key]
+        L.append(f"| {label} | {rate.k}/{rate.n} |")
+    L.append("")
+
+    L.append("## Base model decisions at the frozen threshold (95% Wilson intervals)\n")
+    L.append("| Metric | Value [95% CI] (k/n) |\n|---|---|")
+    for k, name in labels.items():
+        L.append(f"| {name} | {r['_model_at_threshold_rates'][k].fmt()} |")
+    L.append("")
+
     rk = r["ranking"]
-    L.append("## Threshold-free (dangerous vs benign)\n")
+    L.append("## Base model ranking (dangerous vs benign)\n")
     if "roc_auc" in rk:
         L.append(f"- ROC-AUC: {rk['roc_auc']:.4f}")
         L.append(f"- Average precision: {rk['average_precision']:.4f}")
@@ -173,7 +201,7 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
 
     e = r["economics"]
     a = e["assumptions"]
-    L.append("## Cascade economics (assumed traffic)\n")
+    L.append("## Routed cascade economics (assumed traffic)\n")
     L.append(f"Assumes {a['prompts']:,} prompts with {a['prevalence_dangerous']:.2%} dangerous and "
              f"{a['prevalence_ambiguous']:.2%} ambiguous, tier-two cost ${a['tier2_cost_per_call']} per call. "
              + ("Benign escalation is reweighted to "
@@ -192,7 +220,7 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
     L.append("")
 
     c = r["calibration"]
-    L.append("## Calibration (p_dangerous, dangerous vs benign)\n")
+    L.append("## Base model calibration (p_dangerous, dangerous vs benign)\n")
     if "ece" in c:
         L.append(f"- ECE ({len(c['bins'])} bins): {c['ece']:.4f}")
         L.append(f"- Brier score: {c['brier']:.4f}")
@@ -205,7 +233,7 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
         L.append(f"p50 {lt['p50']:.2f} ms, p95 {lt['p95']:.2f} ms, p99 {lt['p99']:.2f} ms (n={lt['n']})\n")
 
     if not slices.empty:
-        L.append("## Slices\n")
+        L.append("## Routed decision slices\n")
         for kind in slices["slice_type"].unique():
             sub = slices[slices["slice_type"] == kind]
             L.append(f"### {kind}\n")
@@ -215,9 +243,10 @@ def write_markdown(r: dict, errors: dict, slices: pd.DataFrame, path: Path) -> N
                          f"[{row['ci_lo']:.3f}, {row['ci_hi']:.3f}] | {row['k']}/{row['n']} |")
             L.append("")
 
-    L.append("## Error analysis\n")
+    L.append("## Routed decision error analysis\n")
     for title, key in (("Missed dangerous (highest p_safe first)", "missed_dangerous"),
-                       ("Escalated hard negatives (lowest p_safe first)", "escalated_hard_negatives")):
+                       ("Escalated hard negatives (model score order; policy flags shown)",
+                        "escalated_hard_negatives")):
         L.append(f"### {title}\n")
         d = errors[key]
         if d.empty:
@@ -241,12 +270,21 @@ def run(preds: str, out: str, val: str | None = None, config: str | None = None,
         vdf = M.load_predictions(val)
         t = M.select_threshold(vdf, cfg["target_recall"])
         th = {"t": t, "source": "val", "val_file": val, "target_recall": cfg["target_recall"],
-              "val_recall": M.at_threshold(vdf, t)["dangerous_recall"].value}
+              "val_recall": M.at_threshold(vdf, t, apply_policy=False)["dangerous_recall"].value,
+              "policy_val_recall": M.at_threshold(vdf, t)["dangerous_recall"].value}
     else:
         th = {"t": float(cfg["default_threshold"]), "source": "config default"}
     t = th["t"]
 
     at = M.at_threshold(df, t)
+    model_at = M.at_threshold(df, t, apply_policy=False)
+    policy = M.policy_mask(df)
+    model_esc = M.escalation_mask(df, t, apply_policy=False)
+    routing = {
+        "policy_flags": M.Rate(int(policy.sum()), len(df)),
+        "already_escalated": M.Rate(int((policy & model_esc).sum()), len(df)),
+        "new_escalations": M.Rate(int((policy & ~model_esc).sum()), len(df)),
+    }
     slices = M.sliced(df, t)
     cal = M.calibration(df, cfg["calibration"]["n_bins"])
     errors = M.worst_errors(df, t, cfg["error_analysis"]["top_k"])
@@ -255,6 +293,17 @@ def run(preds: str, out: str, val: str | None = None, config: str | None = None,
         "counts": df["gold"].value_counts().to_dict(),
         "threshold": th,
         "at_threshold": at,
+        "model_at_threshold": model_at,
+        "routing": routing,
+        "semantics": {
+            "score_columns": "p_safe, p_dangerous, and p_unsure are unchanged base model probabilities",
+            "model_decision": "escalate when p_safe < threshold t",
+            "routed_decision": "escalate when p_safe < threshold t or force_escalate is true",
+            "base_score_metrics": ["threshold selection", "val_recall", "ranking", "calibration",
+                                   "precision-recall plot", "model_at_threshold"],
+            "routed_metrics": ["at_threshold", "threshold_sweep", "slices", "economics",
+                               "error_analysis", "operating tradeoff plot"],
+        },
         "ranking": M.ranking_metrics(df, cfg["recall_points"], cfg["fpr_points"]),
         "economics": M.cascade_economics(at, cfg["traffic"]),
         "calibration": cal,
@@ -266,7 +315,9 @@ def run(preds: str, out: str, val: str | None = None, config: str | None = None,
     slices.to_csv(outdir / "slices.csv", index=False)
     plot_pr(df, t, outdir / "pr_curve.png")
     plot_reliability(cal, outdir / "reliability.png")
-    write_markdown(result | {"_at_threshold_rates": at}, errors, slices, outdir / "report.md")
+    write_markdown(result | {"_at_threshold_rates": at,
+                             "_model_at_threshold_rates": model_at},
+                   errors, slices, outdir / "report.md")
     return result
 
 

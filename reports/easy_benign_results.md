@@ -1,5 +1,19 @@
 # Expanded test results: easy-benign slice
 
+## 2026-10-01 measurement correction
+
+Pre-check routing now preserves model probabilities and uses a separate
+`force_escalate` flag. Refreshed fp32 pre-check AP is **0.898** and int8
+pre-check AP is **0.848**, matching their base models; calibration metrics
+also match. These replace the policy-distorted AP values in the historical
+table below. This is a measurement correction, not a change in model quality.
+All 12 Stage B pre-check reports retain their previous thresholds and
+operating counts. FP32 pre-check evasion recall remains 96.81%, and test
+benign escalation remains 10.81%. Reports now distinguish model decisions
+from additional policy escalations. Validation: 318 passed, 3 skipped.
+
+## Original evaluation
+
 Evaluated 2026-09-29. All model rows cover the same 586 test IDs: 509 benign, 47 dangerous, and 30 ambiguous. The 300 added benign prompts are held-out ToxicChat rows selected by the existing scope filter and seed 7. Their labels come from source annotations and filtering, not a new human review.
 
 Both returned teacher files contain exactly the expected 300 unique IDs. Each merged teacher artifact now contains 6,497 unique IDs. Original score files and the original test file have local backups. No training, calibration-set change, or detector tuning was performed.

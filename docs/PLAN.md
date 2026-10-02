@@ -401,3 +401,29 @@ Added an evaluator guard against stale or partial predictions: required ids
 must match each gold split exactly, with no duplicate/null ids. Validation
 predictions used just for thresholds are checked too. Full suite: 296 passed,
 3 skipped. No further Kaggle run is needed for this evaluation.
+
+### 2026-10-01: separate pre-check routing from calibrated model probabilities
+
+Completed priority 1: pre-check output retains p_safe, p_dangerous, and
+p_unsure and adds an explicit boolean force_escalate column. Final routing
+is force_escalate OR p_safe < t, including at t=0. Threshold selection,
+ranking, and calibration use base model probabilities. Operating rates,
+slices, error analysis, tradeoff plots, and cascade economics use routed
+decisions. Reports expose model-only rates and policy flags, distinguishing
+already-escalated items from additional escalations. Legacy pre-check CSVs
+without force_escalate fail with a regeneration instruction because their
+original probabilities cannot be recovered from the overwritten scores.
+
+Regenerated all four splits for PyTorch, fp32 ONNX, and int8 ONNX from
+cached predictions. Verified all 12 pre-check files preserve probabilities
+exactly; ranking/calibration match base variants, and thresholds and routed
+operating counts match the prior reports. FP32 pre-check test AP is now
+0.898 (previously policy-distorted 0.829); int8 is 0.848 (previously 0.781).
+FP32 pre-check evasion recall remains 96.81%, with 154 additional routed
+items on the evasion split. Test has one flagged benign item already
+escalated by the model, adding no escalations. This corrects measurement
+semantics without retraining or changing detectors. No Kaggle run needed.
+
+Full suite: 318 passed, 3 skipped, including report integration assertions
+for base versus routed metrics, strict flag parsing, and forced routing at
+zero threshold. Existing ONNX export warnings remain.

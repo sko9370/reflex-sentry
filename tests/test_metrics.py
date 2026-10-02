@@ -110,6 +110,67 @@ def test_slices_cover_categories_and_evasion(tiny):
     assert ev["evasion:fiction"] == 1.0
 
 
+def test_policy_routes_flagged_dangerous_and_benign_without_changing_base_metrics(tiny):
+    base_ranking = M.ranking_metrics(tiny, [1.0], [0.25])
+    base_calibration = M.calibration(tiny)
+    base_threshold = M.select_threshold(tiny, 0.75)
+    routed = tiny.copy()
+    routed["force_escalate"] = routed["id"].isin(["d4", "b2"])
+    routed["precheck_flag"] = routed["force_escalate"]
+    routed["precheck_reasons"] = np.where(routed["force_escalate"], "synthetic unreadable", "")
+    M.validate(routed)
+
+    assert M.ranking_metrics(routed, [1.0], [0.25]) == base_ranking
+    assert M.calibration(routed) == base_calibration
+    assert M.select_threshold(routed, 0.75) == base_threshold
+    assert M.at_threshold(routed, 0.7, apply_policy=False)["dangerous_recall"].k == 3
+    at = M.at_threshold(routed, 0.7)
+    assert at["dangerous_recall"].k == 4
+    assert at["benign_escalation_rate"].k == 2
+    assert M.escalation_rate(routed, 0.7).k == 7
+    assert M.escalation_rate(routed, 0.7, apply_policy=False).k == 5
+    assert M.escalation_mask(routed, 0).sum() == 2
+    assert M.escalation_mask(routed, 0, apply_policy=False).sum() == 0
+
+    sweep = M.threshold_sweep(routed)
+    assert sweep.loc[0, "escalation_rate_all"] == pytest.approx(2 / len(routed))
+    assert sweep.loc[0, "esc_dangerous"] == pytest.approx(1 / 4)
+    assert sweep.loc[0, "esc_benign"] == pytest.approx(1 / 4)
+    slices = M.sliced(routed, 0)
+    ddos = slices[(slices["slice"] == "cat:ddos") & (slices["metric"] == "recall")]
+    assert ddos.iloc[0]["value"] == 1.0
+    hn = slices[(slices["slice"] == "hn:detection") & (slices["metric"] == "benign_esc")]
+    assert hn.iloc[0]["value"] == 1.0
+    errors = M.worst_errors(routed, 0.7, 10)
+    assert "d4" not in set(errors["missed_dangerous"]["id"])
+    assert "b2" in set(errors["escalated_hard_negatives"]["id"])
+    assert "force_escalate" in errors["escalated_hard_negatives"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (True, True), (False, False), (1, True), (0, False),
+    ("true", True), ("false", False), ("TRUE", True), ("FALSE", False),
+    ("1", True), ("0", False),
+])
+def test_policy_mask_accepts_csv_boolean_values(raw, expected):
+    assert M.policy_mask(pd.DataFrame({"force_escalate": [raw]})).tolist() == [expected]
+
+
+@pytest.mark.parametrize("raw", [None, np.nan, "", "yes", "no", "2", 2, "0.0"])
+def test_policy_mask_rejects_null_and_unknown_values(raw):
+    with pytest.raises(ValueError, match="invalid force_escalate"):
+        M.policy_mask(pd.DataFrame({"force_escalate": [raw]}))
+
+
+def test_missing_policy_column_is_unforced_but_legacy_precheck_requires_regeneration(tiny):
+    assert not M.policy_mask(tiny).any()
+    assert M.escalation_mask(tiny, 0).sum() == 0
+    legacy = tiny.copy()
+    legacy["precheck_flag"] = False
+    with pytest.raises(ValueError, match="regenerate.*pre-check CSV"):
+        M.validate(legacy)
+
+
 def test_temperature_recovers_overconfidence():
     df = S.make(4000, seed=7, temperature=0.5)
     y = df["gold"].map(C.GOLD_TO_CLASS).to_numpy()

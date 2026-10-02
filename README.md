@@ -97,13 +97,13 @@ Write your labeling guide as you go (`configs/labeling_guide.md`) and record eve
 The student outputs three probabilities that sum to 1: `p_safe`, `p_dangerous`, `p_unsure`.
 
 ```
-escalate  if  p_safe < t
+escalate  if  force_escalate OR p_safe < t
 pass      otherwise
 ```
 
-One threshold, no gaps. (A rule like "dangerous >= 0.5 or unsure >= 0.5" lets through a prompt scored 0.45 / 0.35 / 0.20.)
+`force_escalate` is false unless the optional pre-check flags the input. One model threshold, no gaps. (A rule like "dangerous >= 0.5 or unsure >= 0.5" lets through a prompt scored 0.45 / 0.35 / 0.20.)
 
-**Choosing `t`:** never pick it by hand and never pick it on the test set. On the validation split, choose the smallest `t` (fewest escalations) that still reaches the target recall on `dangerous` (default 0.95). Report all test metrics at that frozen `t`. The eval harness does this with `--val`.
+**Choosing `t`:** never pick it by hand and never pick it on the test set. On the validation split, use the original model probabilities to choose the smallest `t` (fewest model escalations) that still reaches the target recall on `dangerous` (default 0.95). Freeze that same threshold for both base and pre-check variants. The eval harness does this with `--val`.
 
 ---
 
@@ -194,11 +194,25 @@ Fit a single temperature `T` on `val` logits (`reflex_sentry.eval.calibrate.fit_
 
 Stage B can be evaluated with an optional pre-check for encoded blobs,
 character substitution, low English-word coverage, spacing, and mixed-script
-tokens. It routes flagged inputs to `unsure`; it does not label them dangerous.
-The `_pc` rows keep the calibrated base probabilities for unflagged inputs
-and use `[0, 0, 1]` for flagged inputs, ensuring escalation at any positive
-safe-probability threshold. These overrides are routing policy, not calibrated
-confidence estimates. Each variant's threshold is selected on its own val output.
+tokens. It forces flagged inputs to tier two for review; it does not label them dangerous.
+The `_pc` rows keep the calibrated base probabilities for **every** input.
+They add a boolean `force_escalate` routing field alongside `precheck_flag`
+and `precheck_reasons`. The final decision is
+`force_escalate OR (p_safe < t)`, including at a threshold of zero.
+An obfuscation flag routes the prompt for further review; it does not change
+the model's confidence or turn that confidence into an `unsure` prediction.
+
+Temperature and threshold selection use the original model scores. Base and
+pre-check variants therefore share the same model threshold. AP, ROC-AUC,
+and calibration describe those unchanged scores; recall, escalation rates,
+slices, error analysis, operating-point curves, and cascade economics use
+the final routing decision. Reports show both the model-only and routed
+operating point and count how many escalations the policy adds.
+
+Older `_pc` CSVs with probability overrides must be regenerated from the
+base predictions. The evaluator rejects legacy `precheck_flag` files without
+an explicit `force_escalate` field; it cannot recover the original scores
+from overwritten probabilities.
 
 Build the English vocabulary from a locally installed Hunspell dictionary:
 
@@ -262,10 +276,14 @@ Everything in this section is implemented in `reflex_sentry/eval/` and runs on a
 | `source` | str | no | Origin dataset |
 | `tags` | str | no | Semicolon-separated: `hard_negative;hn:detection`, `cat:phishing_se`, `evasion:base64` |
 | `latency_ms` | float | no | Per-prompt wall time for the student on CPU |
+| `force_escalate` | bool | no | Independent routing override; absent means false. Never changes model probabilities. |
+| `precheck_flag`, `precheck_reasons` | bool, str | no | Whether the obfuscation pre-check fired and why; its outputs also include `force_escalate`. |
 
 ### 5.2 Metrics
 
 **Threshold-free (ranking quality, `dangerous` vs `benign`, ambiguous excluded):**
+
+These metrics use model probabilities only, before routing overrides.
 - ROC-AUC and average precision (PR-AUC) for the escalation score `1 - p_safe`
 - Operating points: benign escalation rate at dangerous recall of 90%, 95%, 99%; dangerous recall at benign escalation rate of 1% and 5%
 

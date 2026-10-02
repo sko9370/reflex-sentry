@@ -11,8 +11,8 @@ never generate, to keep it honest about that distinction.
 
 The pre-check never tries to *classify* a prompt as dangerous. It only
 answers "can a downstream reader make sense of this text at all?" and, when
-the answer is no, escalates as `unsure` -- the same disposition the model
-itself should have had for base64/leetspeak input, per README section 2.
+the answer is no, forces escalation through a separate routing flag. The
+student's calibrated probabilities stay intact for ranking and calibration.
 
     python -m reflex_sentry.models.precheck apply --base stage_b \
         --splits val test test_ood test_evasion
@@ -161,16 +161,6 @@ SPACING_MIN_RUN = 6
 # from somewhere) is normal; two or more Latin/non-Latin mixed tokens in one
 # prompt is the homoglyph-substitution pattern (Cyrillic "a" for Latin "a").
 HOMOGLYPH_MIN_MIXED_TOKENS = 2
-
-# --- pre-check override probabilities ---------------------------------------
-# A flagged prompt is "unreadable", not a confirmed "dangerous" call, so
-# all mass goes to p_unsure. Zero p_safe guarantees escalation at every
-# positive threshold, including cutoffs below 0.02. These are policy
-# overrides, not calibrated model probabilities.
-FLAGGED_P_SAFE = 0.0
-FLAGGED_P_DANGEROUS = 0.0
-FLAGGED_P_UNSURE = 1.0
-
 
 # =============================================================================
 # Shared text helpers
@@ -436,10 +426,10 @@ def apply_precheck(base: str, splits: Sequence = APPLY_SPLITS, preds_dir="preds"
                     processed_dir="data/processed") -> dict:
     """For every split with both preds/<base>_<split>.csv and
     data/processed/<split>.parquet, join predictions to text on `id`, run
-    the pre-check per row, override flagged rows' probabilities, and write
-    preds/<base>_pc_<split>.csv. No logits file is written for the "_pc"
-    model, so run_all (reflex_sentry.eval.run_all) treats it as
-    already-calibrated predictions, exactly like the CSVs this reads.
+    the pre-check per row, retain the base probabilities, and write a
+    force_escalate policy column to preds/<base>_pc_<split>.csv. No logits
+    file is written for the "_pc" model, so run_all
+    (reflex_sentry.eval.run_all) treats it as already-calibrated predictions.
     Returns {split: {"path": ..., "n": ..., "n_flagged": ...}} for splits
     actually written."""
     preds_dir, processed_dir = Path(preds_dir), Path(processed_dir)
@@ -475,6 +465,7 @@ def apply_precheck(base: str, splits: Sequence = APPLY_SPLITS, preds_dir="preds"
         out = merged.drop(columns=["text"]).copy()
         out["precheck_flag"] = flags
         out["precheck_reasons"] = reasons_col
+        out["force_escalate"] = flags
 
         base_latency = (out["latency_ms"].to_numpy(dtype=float) if "latency_ms" in out.columns
                          else np.full(len(out), np.nan))
@@ -482,14 +473,9 @@ def apply_precheck(base: str, splits: Sequence = APPLY_SPLITS, preds_dir="preds"
         # NaNs); filling them with 0 would drag the reported p50 down.
         out["latency_ms"] = base_latency + np.asarray(pc_ms, dtype=float)
 
-        flag_mask = out["precheck_flag"].to_numpy()
-        out.loc[flag_mask, "p_safe"] = FLAGGED_P_SAFE
-        out.loc[flag_mask, "p_dangerous"] = FLAGGED_P_DANGEROUS
-        out.loc[flag_mask, "p_unsure"] = FLAGGED_P_UNSURE
-
         out_path = preds_dir / f"{base}_pc_{split}.csv"
         out.to_csv(out_path, index=False)
-        written[split] = {"path": str(out_path), "n": int(len(out)), "n_flagged": int(flag_mask.sum())}
+        written[split] = {"path": str(out_path), "n": int(len(out)), "n_flagged": int(sum(flags))}
     return written
 
 
