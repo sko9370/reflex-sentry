@@ -4,7 +4,7 @@ Reads configs/cyber_keywords.txt: one term or phrase per line, '#' starts a
 comment (inline or full-line), blank lines ignored. Matching is case
 insensitive and word-boundary aware, so multiword phrases like "cobalt
 strike" match as a unit and single words like "shell" do not match inside
-"shellfish". This is a recall-oriented filter (README 4.1): it is meant to
+"shellfish". This is a recall-oriented filter (docs/DATA_CONTRACT.md): it is meant to
 catch defensive/IR vocabulary too, not just offensive terms, so downstream
 labeling has both dangerous and hard-negative candidates to work with.
 

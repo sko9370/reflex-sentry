@@ -10,9 +10,9 @@ soft targets from `data/interim/soft_targets.parquet` (columns id, t_safe,
 t_dangerous, t_unsure), joined to `data/processed/train.parquet` (id, text)
 on `id`.
 
-`val` is reserved for temperature scaling and threshold selection (README
-section 4.5) and never influences training. Checkpoint selection instead
-uses an internal dev set: a stratified 10% of the training pool (by
+`val` is reserved for temperature scaling and threshold selection
+(docs/DATA_CONTRACT.md) and never influences training. Checkpoint selection
+instead uses an internal dev set: a stratified 10% of the training pool (by
 soft-target argmax, fixed seed, grouped by `dup_group` when that column is
 present so near-duplicate rows stay together), scored by KL/log-loss against
 its soft targets. `val.parquet` is only used, when present, to log
@@ -206,7 +206,7 @@ def infer_logits(student, tokenizer, texts: list[str], max_len: int, device: str
 def measure_latency_ms(student, tokenizer, texts: list[str], max_len: int, device: str, sample_size: int,
                         threads: int = 1) -> dict[int, float]:
     """Per-prompt, batch-size-1 CPU latency using the shared protocol in
-    `reflex_sentry.eval.latency` (README 5.4: a single-core gate, batch 1,
+    `reflex_sentry.eval.latency` (docs/WORKFLOWS.md: a single-core gate, batch 1,
     raw text in -> probabilities out). Tokenization, the forward pass, and
     the softmax are all inside the timed region; `threads` (default 1, see
     `--latency-threads`) pins the torch thread count for that region only.
@@ -296,7 +296,7 @@ def evaluate_on_val(student, tokenizer, val_df: pd.DataFrame, max_len: int, devi
     """Informational only: val NLL vs gold and recall at a val-selected
     threshold. Never used to pick the training checkpoint (see `make_dev_split`
     / `evaluate_dev_kl`); val is reserved for temperature scaling and
-    threshold selection downstream (README 4.5)."""
+    threshold selection downstream (docs/DATA_CONTRACT.md)."""
     y = val_df["gold"].map(GOLD_TO_CLASS).to_numpy()
     if np.isnan(y.astype(float)).any():
         raise ValueError("val gold labels must be benign, dangerous, or ambiguous")
@@ -524,7 +524,7 @@ def predict(model_dir: str | Path, splits: list[str], data_dir: str | Path = "da
             out_dir: str | Path = "preds", batch_size: int = 64, latency_sample: int = 200,
             latency_threads: int = 1, device: str | None = None) -> list[Path]:
     """Writes per-split logits CSVs plus one pooled latency sidecar,
-    `<out_dir>/stage_b_latency.json` (README 5.4: latency does not belong in
+    `<out_dir>/stage_b_latency.json` (docs/DATA_CONTRACT.md: latency does not belong in
     the logits CSV, and predict should not rewrite training metadata.json),
     recording the shared protocol (`reflex_sentry.eval.latency`: batch 1,
     `latency_threads` CPU thread(s), tokenization+forward+softmax timed,
@@ -588,7 +588,7 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="rows to time individually at batch size 1 on CPU; rest get latency_ms=NaN")
     p.add_argument("--latency-threads", type=int, default=1,
                     help="torch thread count for the timed latency region; 1 mimics a single-core gate "
-                         "(README 5.4), matching the comparison table's protocol")
+                         "(docs/WORKFLOWS.md), matching the comparison table's protocol")
     p.add_argument("--device", default=None)
 
     return ap

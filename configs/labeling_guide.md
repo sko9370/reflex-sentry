@@ -1,10 +1,12 @@
-# reflex-sentry labeling guide (working draft)
+# reflex-sentry labeling guide
 
-This is a living document. Update it whenever you make a judgment call that
-isn't obviously covered by the rules below, and add a row to the Judgment log
-at the bottom. The point of writing this down is to make your own labeling
-consistent across a thousand-plus decisions and reproducible a week later,
-when `agreement.py compare` checks pass 1 against pass 2.
+This is the judgment reference for gold review and future labeling. Update it
+when a new judgment call is needed and add a row to the Judgment log. The
+saved 800-item gold sample was mostly model-drafted in two passes and then
+reviewed by the owner. Reviewing a visible draft is not blind independent
+annotation; the agreement workflow below is available for a separate blind
+second pass. Sampled seed rows were reviewed as part of gold review, while
+the entire AI-assisted seed corpus has no recorded row-by-row review.
 
 All examples below are described in the abstract (what kind of request it
 is, and toward what end) rather than written as example prompts. Never copy

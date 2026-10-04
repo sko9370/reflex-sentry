@@ -1,7 +1,7 @@
 """Metric functions for the reflex-sentry tier-one classifier.
 
 All functions operate on a pandas DataFrame following the prediction schema in
-README section 5.1. Ranking and calibration use the base model probabilities.
+docs/DATA_CONTRACT.md. Ranking and calibration use the base model probabilities.
 Operational escalation also includes the independent force_escalate policy.
 """
 from __future__ import annotations

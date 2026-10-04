@@ -1,4 +1,4 @@
-"""One command to score and compare several models end to end (README 5.4).
+"""One command to score and compare several models end to end (docs/WORKFLOWS.md).
 
 For each model name given:
 
@@ -15,7 +15,7 @@ For each model name given:
       and gold file both exist, choosing the threshold on
       `preds/{model}_val.csv` when it exists, into `reports/{model}_{split}/`
   (d) after every model is scored, builds `reports/comparison.md` and
-      `reports/comparison.csv` (README 5.4 columns) from each model/split's
+      `reports/comparison.csv` (docs/WORKFLOWS.md) from each model/split's
       `metrics.json`
   (e) optionally applies the deterministic pre-check to each calibrated
       base model and scores its `<model>_pc` predictions separately
@@ -209,8 +209,7 @@ def discover_reported_models(reports_dir: Path) -> list[str]:
     return sorted(found, key=_model_order_key)
 
 
-def build_comparison(models, processed_dir: Path, preds_dir: Path, reports_dir: Path,
-                      models_dir: Path) -> pd.DataFrame:
+def build_comparison(models, reports_dir: Path, models_dir: Path) -> pd.DataFrame:
     rows = []
     for model in models:
         test_m = _read_metrics(reports_dir, model, "test")
@@ -282,7 +281,7 @@ def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
     table_models = discover_reported_models(reports_dir)
     table_models += [m for m in models if m not in table_models]
     table_models = sorted(set(table_models), key=_model_order_key)
-    table = build_comparison(table_models, processed_dir, preds_dir, reports_dir, models_dir)
+    table = build_comparison(table_models, reports_dir, models_dir)
     table.to_csv(reports_dir / "comparison.csv", index=False)
     (reports_dir / "comparison.md").write_text(
         "# Model comparison\n\n"

@@ -125,10 +125,10 @@ def read_any(path: str) -> pd.DataFrame:
 
 def run(inp: str, out: str, rules_path: str | Path = DEFAULT_RULES_PATH,
         latency_sample_n: int = 200, latency_threads: int = 1) -> pd.DataFrame:
-    """Score a labeled eval file (README 5.1 input contract: id, text, gold,
-    optional source/tags) and write a harness prediction CSV (README 5.1
-    output contract) to `out`, plus a latency sidecar next to it (README
-    5.4: `<out stem>_latency.json`) recording the same shared protocol as
+    """Score a labeled eval file (docs/DATA_CONTRACT.md input contract: id, text, gold,
+    optional source/tags) and write a harness prediction CSV (docs/DATA_CONTRACT.md
+    output contract) to `out`, plus a latency sidecar next to it
+    (`<out stem>_latency.json`) recording the same shared protocol as
     Stage A/B (`reflex_sentry.eval.latency`: batch 1, `latency_threads`
     thread(s) -- a no-op for this pure-Python baseline, which is already
     single-threaded -- warmup excluded, fixed-seed sample) so warmup and
@@ -171,7 +171,7 @@ def run(inp: str, out: str, rules_path: str | Path = DEFAULT_RULES_PATH,
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--in", dest="inp", required=True, help="labeled eval file (csv or parquet), README 5.1")
+    ap.add_argument("--in", dest="inp", required=True, help="labeled eval file (csv or parquet), docs/DATA_CONTRACT.md")
     ap.add_argument("--out", required=True, help="prediction CSV to write")
     ap.add_argument("--rules", default=str(DEFAULT_RULES_PATH), help="keyword_rules.yaml path")
     ap.add_argument("--latency-sample-n", type=int, default=200,

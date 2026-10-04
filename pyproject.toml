@@ -17,10 +17,12 @@ dependencies = [
     "pyyaml>=6.0",
     "tabulate>=0.9",
     "pyarrow>=15.0",
-    "pytest>=8.0",
 ]
 
 [project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
 stage_a = [
     "sentence-transformers>=3.0",
 ]

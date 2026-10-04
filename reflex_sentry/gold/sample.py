@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Per-split gold set sizes chosen 2026-09-27 (docs/PLAN.md).
+# Per-split gold set sizes chosen 2026-09-27 (docs/history/DECISIONS.md).
 DEFAULT_N = {"val": 300, "test": 300, "test_ood": 200}
 DEFAULT_SEED = 1337
 

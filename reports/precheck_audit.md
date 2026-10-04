@@ -1,5 +1,12 @@
 # Pre-check flag-rate audit
 
+Historical snapshot from before the 2026-09-29 300-row ordinary-benign
+ToxicChat addition to the test split. Its 208 hard-negative benign rows and
+one other-benign row describe the original 286-row test,
+not the expanded 586-row test. The separate 2,000-row ordinary-benign audit
+sample is not the later appended 300-row test slice. This file has not been
+regenerated for the expanded test.
+
 Counts only -- see reflex_sentry.models.precheck.audit. Higher is better on dangerous/generalization rows, lower is better on benign rows.
 
 | Slice | Flag rate (k/n) |

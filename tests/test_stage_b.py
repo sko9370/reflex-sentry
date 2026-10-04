@@ -783,9 +783,9 @@ def test_sweep_choose_refuses_when_nothing_passes(tiny_export):
 
 
 def test_sweep_dev_fold_never_reads_val(tiny_export, monkeypatch):
-    """The int8 sweep selects on the training dev fold (README 4.1: val is
-    reserved for temperature scaling and threshold selection). Monkeypatch
-    pd.read_parquet to record every path it is asked to read and assert none
+    """The int8 sweep selects on the training dev fold
+    (docs/DATA_CONTRACT.md: val is reserved for temperature scaling and
+    threshold selection). Monkeypatch pd.read_parquet to record every path it is asked to read and assert none
     of them is val.parquet."""
     import shutil
     from reflex_sentry.models import export_onnx as EX

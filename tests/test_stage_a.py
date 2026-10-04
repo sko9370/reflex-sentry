@@ -166,8 +166,8 @@ def test_train_drops_nan_source_label_rows(workspace):
 
 
 def test_train_never_reads_val_and_C_unaffected_by_it(workspace, monkeypatch):
-    """README 4.1 reserves val for temperature scaling and threshold
-    selection only: train() must never open val.parquet, and the chosen C
+    """docs/DATA_CONTRACT.md reserves val for temperature scaling and
+    threshold selection only: train() must never open val.parquet, and the chosen C
     must not change whether or not val.parquet even exists."""
     make_soft_targets(workspace["train_df"]).to_parquet(workspace["soft_targets"], index=False)
     assert workspace["val"].exists()

@@ -11,14 +11,14 @@ keywords_path: configs/cyber_keywords.txt
 
 # Sources listed here are in scope by construction: every row from them gets
 # in_scope=True regardless of whether the keyword prefilter matched, since they are
-# already known to be cyber-relevant (hn_seed is hand-written cyber hard negatives).
+# already known to be cyber-relevant (hn_seed is AI-assisted cyber hard-negative drafts).
 # kw_hits is still recorded from whatever the keyword list actually matched (possibly
 # ""), so it's easy to see which bypassed rows the keyword list is missing.
 prefilter_bypass_sources:
   - hn_seed
 
 # Exact-dedupe tie-break: when the same normalized text appears in more than one
-# source, keep the row from the source listed earliest here. Hand-written hard
+# source, keep the row from the source listed earliest here. Drafted hard
 # negatives win first (highest value, least redundant elsewhere); OR-Bench and
 # XSTest lose last since they are the most likely to overlap generic phrasing.
 dedupe_preference:

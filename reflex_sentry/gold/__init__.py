@@ -6,7 +6,7 @@ file (``export.py``), validates and ingests filled-in labels back into
 ``data/gold/<split>.csv`` and the merged ``data/processed/<split>.parquet``
 (``ingest.py``), and checks pass-1-vs-pass-2 self-agreement (``agreement.py``).
 
-Label taxonomy and tag vocabulary are defined here (README section 1) rather
+Label taxonomy and tag vocabulary are defined here (configs/labeling_guide.md) rather
 than imported from ``reflex_sentry.data``, which another workstream owns.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 GOLD_LABELS = ("dangerous", "benign", "ambiguous")
 ALL_GOLD_LABELS = GOLD_LABELS + ("out_of_scope",)
 
-# dangerous subcategories, tagged cat:<name> (README section 1)
+# dangerous subcategories, tagged cat:<name> (configs/labeling_guide.md)
 CAT_TAGS = (
     "cat:malware_dev",
     "cat:evasion",
@@ -44,7 +44,7 @@ HARD_NEGATIVE_TAG = "hard_negative"
 # Every tag ingest.py will accept in a gold sheet's tags column.
 ALLOWED_TAGS = frozenset({HARD_NEGATIVE_TAG, *CAT_TAGS, *HN_TAGS})
 
-# data/gold/<split>.csv column order (README "Shared data contract")
+# data/gold/<split>.csv column order (docs/DATA_CONTRACT.md)
 GOLD_CSV_COLUMNS = ("id", "text", "source", "gold", "tags", "labeler_pass", "labeled_at", "notes")
 
 

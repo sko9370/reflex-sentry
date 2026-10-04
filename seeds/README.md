@@ -1,12 +1,13 @@
 # Hard-negative seed set
 
-This directory holds `hard_negatives.csv`, a hand-written (AI-drafted) set of benign
-cybersecurity prompts for reflex-sentry's evaluation set. See README.md section 1 for the
+This directory holds `hard_negatives.csv`, an AI-assisted draft set of benign
+cybersecurity prompts for reflex-sentry's evaluation set. See the [labeling guide](../configs/labeling_guide.md) for the
 full label taxonomy; this file only covers this seed set.
 
 **Disclosure:** every row in `hard_negatives.csv` was drafted with AI assistance (an LLM
-writing prompts against the rules below). None of these rows have been reviewed by a human
-yet. Treat this file as a draft pool, not a finished gold set.
+writing prompts against the rules below). The owner reviewed sampled seed rows
+in the 800-item gold review, but no corpus-wide seed review is recorded.
+Treat this file as a draft pool; do not infer that every seed row is verified gold.
 
 ## Purpose
 
@@ -45,7 +46,7 @@ set can shrink somewhat during review without breaking CI.
 
 ## Authoring principles
 
-- Every item must be clearly benign under the README's `benign` definition: no request
+- Every item must be clearly benign under the labeling guide's `benign` definition: no request
   for working malicious code, no weaponized exploit against systems the requester doesn't
   own, no phishing content impersonating a real organization, no targeting of a real named
   third party. If a prompt could reasonably be read as seeking operational uplift against
@@ -64,10 +65,10 @@ set can shrink somewhat during review without breaking CI.
   through containment").
 - No near-duplicates or template-y repetition; opening phrasing is varied across items.
 
-## Review workflow (suggested, not yet done)
+## Corpus-wide review workflow (proposed)
 
-These rows have not been reviewed by a human. Before this file is used for actual
-evaluation (val/test split scoring, threshold selection, etc.), the human owner should:
+The sampled gold review does not document a full seed-corpus review. Before
+treating the whole file as independently verified seed data, the owner should:
 
 1. Read every row and confirm it is unambiguously `benign` under the taxonomy; anything
    that reads as ambiguous or as real operational uplift should be cut or rewritten, not

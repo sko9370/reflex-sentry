@@ -1,6 +1,6 @@
 """Turn one or two teacher score files into a harness prediction CSV
-(README 5.1) for a hand-labeled eval set, so the teacher can be scored as
-the upper-reference row of README 5.4.
+(docs/DATA_CONTRACT.md) for a gold-labeled eval set, so the teacher can be scored as
+a quality-reference row in the model comparison.
 
 Single teacher
 --------------
@@ -39,7 +39,7 @@ CLI
         --out preds/teacher_both_val.csv
 
 `latency_ms` is left empty: teacher latency is not the point of the
-comparison table (README 5.4 records that separately if wanted).
+comparison table (record that separately if wanted).
 """
 from __future__ import annotations
 

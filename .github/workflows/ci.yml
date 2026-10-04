@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-light:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,11 +16,46 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install package and test dependencies
+        run: python -m pip install -e '.[test]'
 
       - name: Run tests
         run: python -m pytest -q
 
       - name: Run end-to-end smoke test
         run: bash scripts/smoke_e2e.sh
+
+  test-stage-b-onnx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package with Stage B and test dependencies
+        run: python -m pip install -e '.[test,stage_b]'
+
+      - name: Run offline Stage B and ONNX tests without skips
+        run: |
+          python - <<'PY'
+          import pytest
+
+          class NoSkips:
+              def pytest_terminal_summary(self, terminalreporter):
+                  skipped = terminalreporter.stats.get("skipped", [])
+                  if skipped:
+                      terminalreporter.write_line(
+                          f"Stage B/ONNX tests skipped {len(skipped)} test(s)", red=True
+                      )
+
+              def pytest_sessionfinish(self, session, exitstatus):
+                  terminalreporter = session.config.pluginmanager.get_plugin("terminalreporter")
+                  if session.testscollected == 0 or terminalreporter.stats.get("skipped"):
+                      session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+          raise SystemExit(pytest.main(["-q", "-rs", "tests/test_stage_b.py"], plugins=[NoSkips()]))
+          PY

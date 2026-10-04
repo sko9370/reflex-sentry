@@ -1,6 +1,6 @@
 """Merge two independent LLM labeling passes into a human-review-ready draft.
 
-Two labelers (A and B) each label the same ~800 items independently. This
+Two labelers (A and B) each label the same items independently. This
 combines their raw label files with the blank labeling sheets and the
 candidate pools, produces a draft gold sheet per split that a human reviewer
 can open and fix up, ranks every row by how urgently a human should look at
@@ -368,9 +368,9 @@ def print_summary(split: str, merged: pd.DataFrame) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sheets-dir", default="data/gold/sheets")
-    ap.add_argument("--labels-glob-a", default="data/gold/work/A_batch*_labels.csv")
-    ap.add_argument("--labels-glob-b", default="data/gold/work/B_batch*_labels.csv")
-    ap.add_argument("--pools-dir", default="data/processed_upload")
+    ap.add_argument("--labels-glob-a", required=True, help="glob for first-pass label files")
+    ap.add_argument("--labels-glob-b", required=True, help="glob for second-pass label files")
+    ap.add_argument("--pools-dir", required=True, help="directory containing candidate pool parquets")
     ap.add_argument("--adjudications", default=None)
     ap.add_argument("--out-dir", default="data/gold/sheets")
     ap.add_argument("--work-dir", default="data/gold/work")

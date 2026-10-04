@@ -3,7 +3,7 @@
 Accepts either a filled-in spreadsheet CSV (from `export.py`'s `--csv`) or a
 Label Studio JSON export of completed annotations for the tasks `export.py`'s
 `--label-studio` produced. Either way, every row is validated against the
-label taxonomy in README section 1 before anything is written:
+label taxonomy in configs/labeling_guide.md before anything is written:
 
 - gold in {dangerous, benign, ambiguous, out_of_scope}
 - tags drawn only from the known cat:*/hn:*/hard_negative vocabulary
@@ -164,7 +164,7 @@ def write_gold_csv(df: pd.DataFrame, path: str) -> None:
 
 
 def build_merged(pool: pd.DataFrame, gold: pd.DataFrame) -> pd.DataFrame:
-    """pool columns + gold + tags, out_of_scope dropped, per README merge rule."""
+    """pool columns + gold + tags, out_of_scope dropped, per docs/DATA_CONTRACT.md."""
     pool = pool.copy()
     pool["id"] = pool["id"].astype(str)
     g = gold.copy()

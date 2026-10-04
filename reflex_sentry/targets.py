@@ -1,11 +1,10 @@
-"""Soft-target construction for reflex-sentry student training (README 4.3,
-milestone 3).
+"""Soft-target construction for reflex-sentry student training.
 
-Formula choices (every deviation from the README 4.3 starting point is
+Formula choices (every deviation from the single-teacher starting point is
 recorded here, since this is one of the most consequential design choices
 in the project):
 
-Single teacher (default, exactly README 4.3)
+Single teacher (default)
     p = p_unsafe_teacher
     y = source_label (0.0 / 1.0 / NaN)
     d = |p - y|, 0 if y is NaN
@@ -102,7 +101,7 @@ def _renormalize(t_safe: np.ndarray, t_dangerous: np.ndarray, t_unsure: np.ndarr
 
 
 def base_disagreement_unsure(p: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """README 4.3's `d` and `u` (before any two-teacher extension)."""
+    """Single-teacher `d` and `u`, before any two-teacher extension."""
     p = np.asarray(p, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     d = np.where(np.isnan(y), 0.0, np.abs(p - y))
@@ -121,7 +120,7 @@ def build_targets(
 ):
     """Return (d, u, t_safe, t_dangerous, t_unsure) for the teacher-based
     formula (single- or two-teacher; pass `teacher_disagreement`/
-    `controversial` as None to get the exact single-teacher README 4.3
+    `controversial` as None to get the single-teacher
     formula)."""
     p = np.asarray(p, dtype=np.float64)
     d, u = base_disagreement_unsure(p, y)

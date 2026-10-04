@@ -1,13 +1,13 @@
 """Stage A baseline student: frozen sentence embeddings + multinomial logistic
-regression (README 4.4, milestone 4).
+regression (docs/WORKFLOWS.md).
 
 Trains on the argmax of the soft targets in `data/interim/soft_targets.parquet`
 (sample_weight = the max target probability), falling back to the training
 pool's `source_label` (1 -> dangerous, 0 -> safe, NaN dropped) when soft
 targets are not built yet.
 
-README 4.1 reserves `val` for temperature scaling and threshold selection
-only, so `train` never reads it. `C` is instead chosen by log-loss against an
+docs/DATA_CONTRACT.md reserves `val` for temperature scaling and threshold
+selection only, so `train` never reads it. `C` is instead chosen by log-loss against an
 internal dev set: a stratified 15% of the *training pool* (by target argmax,
 grouped by `dup_group` when that column is present so near-duplicates never
 split across the fold, fixed seed), scored against the dev soft-target
@@ -246,8 +246,8 @@ def train(train_path: str | Path = DEFAULT_TRAIN_PATH,
     """Train the Stage A classifier and save it plus its metadata. Returns
     the metadata dict (also written to `model_dir/metadata.json`).
 
-    Never reads `val.parquet`: README 4.1 reserves `val` for temperature
-    scaling and threshold selection, so `C` is chosen against an internal
+    Never reads `val.parquet`: docs/DATA_CONTRACT.md reserves `val` for
+    temperature scaling and threshold selection, so `C` is chosen against an internal
     dev fold carved out of the training pool instead (see
     `_stratified_dev_mask`), and the final model is refit on the full pool.
     """
@@ -293,7 +293,7 @@ def train(train_path: str | Path = DEFAULT_TRAIN_PATH,
 
     head_params = int(final.coef_.size + final.intercept_.size)
     # Count the frozen embedder too: it runs at inference, so it is part of
-    # the deployed model's size (README 5.4 "Params").
+    # the deployed model's size (docs/WORKFLOWS.md "Params").
     embed_params = 0
     st = _ST_MODEL_CACHE.get(embed_model)
     if st is None and embedder is None:
@@ -334,7 +334,7 @@ def _measure_latency(texts: np.ndarray, embed_fn: Embedder, clf: LogisticRegress
                       sample_n: int, threads: int = 1, seed: int = 0) -> tuple[np.ndarray, dict[int, float]]:
     """Real single-prompt embed+classify wall time (bypassing the embedding
     cache), measured with the shared protocol in `reflex_sentry.eval.latency`
-    (README 5.4: a single-core gate, batch 1, raw text in -> probabilities
+    (docs/WORKFLOWS.md: a single-core gate, batch 1, raw text in -> probabilities
     out): embedding and classification (predict_proba, the equivalent of a
     softmax) are both inside the timed region, under `threads` CPU thread(s)
     (default 1, see `--latency-threads`), warmup excluded, a fixed-seed
@@ -376,9 +376,9 @@ def predict(model_dir: str | Path = DEFAULT_MODEL_DIR,
             latency_threads: int = 1,
             random_state: int = 0) -> dict:
     """Score every available split, writing both a logits CSV and a
-    prediction CSV per README 5.1 / the calibration contract, plus one
-    pooled latency sidecar `<preds_dir>/<model_name>_latency.json` (README
-    5.4: latency does not belong in the logits CSV, and predict should not
+    prediction CSV per docs/DATA_CONTRACT.md, plus one
+    pooled latency sidecar `<preds_dir>/<model_name>_latency.json`
+    (docs/DATA_CONTRACT.md: latency does not belong in the logits CSV, and predict should not
     rewrite training metadata.json) recording the shared protocol
     (`reflex_sentry.eval.latency`: batch 1, `latency_threads` CPU thread(s),
     embed+classify timed, fixed sample) and p50/p95 pooled across every
@@ -475,7 +475,7 @@ def main() -> None:
     pp.add_argument("--latency-sample-n", type=int, default=200)
     pp.add_argument("--latency-threads", type=int, default=1,
                     help="torch thread count for the timed latency region (affects the embedder only "
-                         "when it uses torch); 1 mimics a single-core gate (README 5.4)")
+                         "when it uses torch); 1 mimics a single-core gate (docs/WORKFLOWS.md)")
 
     a = ap.parse_args()
     if a.cmd == "train":

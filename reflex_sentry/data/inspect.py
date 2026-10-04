@@ -13,7 +13,7 @@ Prints two summaries that only ever need aggregate counts, never a row's own tex
    `_relative_deficit_split` fix (see docs/DATA_CONTRACT.md).
 2. The top `--top-n` (default 40) `kw_hits` keywords by frequency among in-scope rows from
    public sources (i.e. everything in `data/interim/cyber_pool.parquet` except `hn_seed`,
-   which is hand-written, not scraped), with each keyword's "sole-hit share": the fraction of
+   which is AI-drafted, not scraped), with each keyword's "sole-hit share": the fraction of
    its matching rows where it was the *only* keyword that matched, and its tier (strong/weak,
    re-derived from `--keywords`, default `configs/cyber_keywords.txt`). A generic word with a
    high sole-hit share and high frequency is a prefilter precision risk worth a manual look

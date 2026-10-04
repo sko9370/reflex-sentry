@@ -4,13 +4,13 @@ Splits at the dup_group level (never at the row level) so near-duplicates
 never straddle splits. Entire sources (config `ood_sources`, a list -- or the
 older `ood_source` singular string for backward compat, default
 `["toxic_chat"]`) are held out for test_ood_pool and excluded from
-train/val/test entirely, per README 4.1. hn_seed rows are scarce and matter
+train/val/test entirely, per docs/DATA_CONTRACT.md. hn_seed rows are scarce and matter
 most for eval, so a configurable share of them (`hn_pool_ratio`) is routed
 into val_pool / test_pool ahead of everything else, and only the remainder
 goes to train.
 
 val_pool / test_pool / test_ood_pool are CANDIDATE pools for hand labeling
-(README 3, step 2); the gold labels are merged in separately.
+(docs/WORKFLOWS.md); the gold labels are merged in separately.
 
 val_pool and test_pool are filled by ONE joint pass per stratum
 (`_relative_deficit_split`), not by filling val to its target and then

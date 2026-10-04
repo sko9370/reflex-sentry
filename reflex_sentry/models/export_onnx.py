@@ -1,10 +1,10 @@
 """Export the Stage B student to ONNX, int8-quantize it, check parity, and
 predict with an onnxruntime CPU session.
 
-Pipeline (README 4.5): export fp32 ONNX -> dynamic int8 quantization -> pick
+Pipeline (docs/WORKFLOWS.md): export fp32 ONNX -> dynamic int8 quantization -> pick
 a quantization config on the training dev fold (the same held-out rows used
-for Stage B checkpoint selection, README 4.1: val is reserved for temperature
-scaling and threshold selection, never for choosing a model config) at a
+for Stage B checkpoint selection; docs/DATA_CONTRACT.md reserves val for
+temperature scaling and threshold selection, never for choosing a model config) at a
 matched escalation rate -> only then run on val/test sets. `parity` on val is
 kept as an informational-only report; it never gates anything.
 
@@ -57,7 +57,7 @@ try:  # pragma: no cover
 except ImportError:  # pragma: no cover
     ort = None
 
-# int8 config selection pass rule (README 4.5), evaluated on the training dev
+# int8 config selection pass rule (docs/WORKFLOWS.md), evaluated on the training dev
 # fold at a matched escalation rate (label-free -- see `matched_rate_metrics`):
 # int8's threshold is chosen to reproduce fp32's escalation rate rather than
 # reusing fp32's threshold, because int8 shifts logits and fp32's threshold
@@ -483,7 +483,7 @@ def reference_threshold(ref: dict, target_recall: float) -> float:
 
 PARITY_NOTE = (
     "informational only: val is reserved for temperature scaling and threshold selection "
-    "(README 4.1), so this report never gates int8 config selection -- that happens on the "
+    "(docs/DATA_CONTRACT.md), so this report never gates int8 config selection -- that happens on the "
     "training dev fold at a matched escalation rate (see `export_onnx sweep`). fp32 and int8 "
     "are each scored here at their OWN val-calibrated threshold, matching how "
     "reflex_sentry.eval.run_all actually calibrates each variant, not a single threshold shared "
@@ -553,7 +553,7 @@ def dev_fold_reference(model_dir: str | Path, onnx_path: str | Path, train_parqu
     """The internal dev fold used for int8 config selection: the same
     held-out rows used for Stage B checkpoint selection (`stage_b.
     make_dev_split`, reusing metadata.json's `seed`/`dev_ratio` unless
-    overridden), never `val` (README 4.1: val is reserved for temperature
+    overridden), never `val` (docs/DATA_CONTRACT.md: val is reserved for temperature
     scaling and threshold selection). Labels are the soft-target argmax
     (dangerous vs benign); rows whose argmax is `unsure` are dropped, since
     they are not part of the dangerous/benign ranking task."""
@@ -699,9 +699,9 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Pat
           batch_size: int = 32, latency_sample: int = 200, preprocess: bool = False, bulk_threads: int = 0,
           min_agreement: float = MIN_MATCHED_AGREEMENT, max_ap_drop: float = MAX_AP_DROP,
           dev_ratio: float | None = None, seed: int | None = None) -> dict:
-    """Quantize with each config and select on the training dev fold (README
-    4.1: val is reserved for temperature scaling and threshold selection, so
-    it must not be used to pick a model config) at a matched escalation rate
+    """Quantize with each config and select on the training dev fold
+    (docs/DATA_CONTRACT.md: val is reserved for temperature scaling and
+    threshold selection, so it must not be used to pick a model config) at a matched escalation rate
     (`matched_rate_metrics`, label-free: fp32's threshold does not transfer
     to int8's shifted logits, so int8 gets its own threshold reproducing
     fp32's escalation rate instead). Writes sweep.json / sweep.md next to the
@@ -755,7 +755,7 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Pat
         "pass_rule": {"min_matched_agreement": min_agreement, "max_ap_drop": max_ap_drop},
         "fp32_onnx_latency": fp32_latency,
         "results": results, "chosen": chosen_name, "chosen_path": None,
-        "selection_note": "selected on the training dev fold (README 4.1 reserves val for "
+        "selection_note": "selected on the training dev fold (docs/DATA_CONTRACT.md reserves val for "
                            "temperature scaling and threshold selection) at a matched escalation "
                            "rate, label-free",
     }
@@ -791,7 +791,7 @@ def sweep(model_dir: str | Path, onnx_path: str | Path, train_parquet: str | Pat
           f"selection: training dev fold (dev_ratio={ref['dev_ratio']}, seed={ref['seed']}), "
           f"{ref['n_dev_rows']} rows ({ref['n_dropped_unsure']} unsure dropped), target recall "
           f"{target_recall}; matched escalation rate, label-free (val is reserved for temperature "
-          "scaling / threshold selection, README 4.1). latency: batch 1, 1 thread, median/p95 over "
+          "scaling / threshold selection, docs/DATA_CONTRACT.md). latency: batch 1, 1 thread, median/p95 over "
           f"up to {latency_sample} prompts.", "",
           format_sweep_table(fp32_latency, results, chosen_name, markdown=True), "",
           f"Pass rule: matched-rate decision agreement >= {min_agreement}, AP drop <= {max_ap_drop}. "
@@ -858,17 +858,6 @@ def predict_onnx_split(onnx_path: str | Path, tokenizer, metadata: dict, split: 
     return out_path
 
 
-def predict_int8_split(int8_path: str | Path, tokenizer, metadata: dict, split: str, data_dir: str | Path,
-                       out_dir: str | Path, latency_threads: int = 1, batch_size: int = 32,
-                       latency_sample: int = 200, bulk_threads: int = 0,
-                       latency_sink: list[float] | None = None) -> Path | None:
-    """Compatibility wrapper for callers of the original int8 split predictor."""
-    return predict_onnx_split(int8_path, tokenizer, metadata, split, data_dir, out_dir, name="stage_b_int8",
-                              latency_threads=latency_threads, batch_size=batch_size,
-                              latency_sample=latency_sample, bulk_threads=bulk_threads,
-                              latency_sink=latency_sink)
-
-
 def predict_int8(model_dir: str | Path, int8_path: str | Path | None = None,
                  splits: list[str] | None = None, data_dir: str | Path = "data/processed",
                  out_dir: str | Path = "preds", latency_threads: int = 1,
@@ -876,8 +865,8 @@ def predict_int8(model_dir: str | Path, int8_path: str | Path | None = None,
                  *, onnx_path: str | Path | None = None, name: str | None = None) -> list[Path]:
     """onnxruntime CPU predictor. Logits come from a bulk session using
     `bulk_threads` (0 = all cores); `latency_ms` comes from a separate session
-    with `latency_threads` (default 1, mimicking a single-core gate, README's
-    CPU-latency framing) at batch size 1. Raising `latency_threads` changes
+    with `latency_threads` (default 1, mimicking the single-core gate in
+    docs/WORKFLOWS.md) at batch size 1. Raising `latency_threads` changes
     the latency story, not the logits."""
     if (int8_path is None) == (onnx_path is None):
         raise ValueError("provide exactly one of int8_path or onnx_path")

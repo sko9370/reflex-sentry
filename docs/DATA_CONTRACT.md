@@ -24,7 +24,7 @@ isn't in any column (see `or_bench` and `_infer_split` in `data/SOURCES.md`).
 | `xstest` | walledai/XSTest | `loaders.load_xstest` |
 | `or_bench` | bench-llm/or-bench | `loaders.load_or_bench` |
 
-Plus `seeds/hard_negatives.csv` (hand-written, committed, owned by another agent): columns
+Plus `seeds/hard_negatives.csv` (AI-assisted drafts, committed): columns
 `id, text, gold, tags, source, notes`; `gold` is always `"benign"`, `source` is always `"hn_seed"`,
 `tags` look like `hard_negative;hn:detection`. Loaded by `loaders.load_hn_seed`.
 
@@ -43,7 +43,7 @@ DataFrame with these columns, in this order:
 | `id` | str | `"<source>:<first 12 hex of sha1(normalize_text(text))>"`. Stable across runs: re-running the pipeline on the same raw files always reproduces the same ids, so downstream files (gold labels, predictions) can join on `id` safely. |
 | `text` | str | Original text, stripped of leading/trailing whitespace. Not lowercased or otherwise altered. |
 | `source` | str | One of `schema.SOURCES`: `toxic_chat`, `wildguardmix`, `beavertails`, `aegis2`, `hh_redteam`, `xstest`, `or_bench`, `hn_seed`. |
-| `source_label` | float | `1.0` unsafe, `0.0` safe, `NaN` unknown. This is `y` in the README 4.3 soft-target formula. |
+| `source_label` | float | `1.0` unsafe, `0.0` safe, `NaN` unknown. This can supply `y` in the soft-target calculation described in [METHOD.md](METHOD.md). |
 | `source_category` | str or null | Raw category string(s) from the source (semicolon-joined where a source has more than one), or null when the source has no category. |
 | `is_adversarial` | bool or null | Whether the source itself flags the prompt as an adversarial/red-team/jailbreak attempt. Null when the source doesn't say. |
 | `tags` | str | Semicolon-separated, `""` if none. Only `hn_seed` rows carry meaningful tags today (`hard_negative;hn:<name>`); everything else keeps its category, if any, in `source_category` instead. |
@@ -96,17 +96,18 @@ All `cyber_pool.parquet` columns plus `split: str` (one of `schema.SPLIT_NAMES`:
 
 - Split is decided at the **`dup_group` level**, never at the row level, so near-duplicate rows
   always land in the same split.
-- One or more entire sources (`configs/data.yaml` -> `split.ood_sources`, a list, default
-  `[toxic_chat]`) are sampled down to `test_ood_pool_size` candidate rows *combined* for
+- One or more entire sources (`configs/data.yaml` -> `split.ood_sources`, a list; the
+  committed configuration uses `toxic_chat`, `aegis2`, `hh_redteam`, and
+  `beavertails`) are sampled down to `test_ood_pool_size` candidate rows *combined* for
   `test_ood_pool`; the rest of those sources' rows are dropped entirely (never used for train,
-  val, or test), per README 4.1. The older singular `split.ood_source` (a plain string) is still
+  val, or test). The older singular `split.ood_source` (a plain string) is still
   accepted for backward compat if a config sets that instead; `ood_sources` wins if both are set.
 - `hn_seed` rows are scarce and matter most for eval: a configurable share
   (`split.hn_pool_ratio`, default 0.8) is routed into `val_pool`/`test_pool` before anything else;
   only the leftover share goes to `train`.
 - Everything else is stratified by a `(safe/unsafe/unknown, hn:<name> or source_category)` key and
   filled into `val_pool`/`test_pool` up to their configured target sizes
-  (`val_pool_size`/`test_pool_size`, default 600 each -- candidate counts, not final hand-labeled
+  (`val_pool_size`/`test_pool_size`, 400 each in the committed config -- candidate counts, not final gold
   counts), with the remainder going to `train`.
 - `val_pool` and `test_pool` are filled by **one joint pass per stratum**
   (`split._relative_deficit_split`, apportioned by `split._apportion_stratum`'s largest-remainder
@@ -120,15 +121,15 @@ All `cyber_pool.parquet` columns plus `split: str` (one of `schema.SPLIT_NAMES`:
   of points of each other on realistic pool sizes (see
   `tests/test_data_pipeline.py::test_split_val_and_test_pools_have_matching_composition`).
 
-`val_pool`, `test_pool`, and `test_ood_pool` are **candidates for hand labeling**, not gold data.
-The gold labels live in `data/gold/{val,test,test_ood}.csv` (owned by another agent) and get
+`val_pool`, `test_pool`, and `test_ood_pool` are **candidates for labeling**, not gold data.
+The gold labels live in `data/gold/{val,test,test_ood}.csv` and get
 merged into `data/processed/{val,test,test_ood}.parquet` (note: no `_pool` suffix once gold is
 merged) with two added columns:
 
 | Column | Type | Notes |
 |---|---|---|
-| `gold` | str | `dangerous`, `benign`, or `ambiguous` (README section 1). |
-| `tags` | str | Overwrites/extends the pool's `tags` with the hand-labeler's category tags (`cat:<name>`, `hard_negative;hn:<name>`), per README section 1. |
+| `gold` | str | `dangerous`, `benign`, or `ambiguous` (see the [labeling guide](../configs/labeling_guide.md)). The saved 800-row gold set was mostly model-drafted and owner-reviewed, not independently blind human-labeled. |
+| `tags` | str | Overwrites/extends the pool's `tags` with reviewed category tags (`cat:<name>`, `hard_negative;hn:<name>`). |
 
 `validate_pool(df, stage="split")` additionally requires `split` to be present, non-null, and one
 of `schema.SPLIT_NAMES`.
@@ -139,14 +140,36 @@ of `schema.SPLIT_NAMES`.
 appended rows from `python -m reflex_sentry.data.easy_benign ... --append-to-test`: `gold="benign"`,
 `tags=""`, `source="toxic_chat"`, `split="test"`, plus a bool column `easy_benign` (False on all
 other rows). Re-running gold ingest for test overwrites `test.parquet`; re-run this command
-afterwards. Ids are not in `teacher_scores_*`; see `docs/PLAN.md` (decision 2026-09-29) for the
-scorer command and `reflex_sentry.teacher.merge_scores`.
+afterwards. The 300 new ids were scored separately and merged into both
+teacher files; see the completed [historical procedure](history/KAGGLE_EASY_BENIGN.md).
 
 ## Prediction CSVs
 
-Not produced by this package. See README 5.1: columns `id, gold, p_safe, p_dangerous, p_unsure`
-(required), `source, tags, latency_ms` (optional). `id` for a wrapped variant is
+Produced by model/teacher/baseline inference, then consumed by the evaluation
+package. See [METHOD.md](METHOD.md) for the probability and routing contract.
+Required columns are `id, gold, p_safe, p_dangerous, p_unsure`; optional fields
+include `source, tags, latency_ms, force_escalate, precheck_flag,
+precheck_reasons`. `id` for a wrapped variant is
 `<pool id>__<wrapper name>` (see `reflex_sentry/eval/wrappers.py`).
+
+### Student logits and timing sidecars
+
+Student predictors first write `preds/<model>_<split>_logits.csv` with
+`id`, `gold`, raw `logit_safe`, `logit_dangerous`, `logit_unsure` in that
+class order, plus available `source`, `tags`, and per-row `latency_ms`.
+The evaluator fits temperature using the `val` logits and writes calibrated
+probability CSVs for each available split. Keyword and teacher predictors
+can supply probability CSVs directly. Pre-check variants copy calibrated
+probabilities and add `force_escalate`, `precheck_flag`, and
+`precheck_reasons`; they do not alter logits or probabilities.
+
+Pooled CPU timing details live in `preds/<model>_latency.json` rather than
+training `metadata.json` or logits CSV. The sidecar has
+`latency_protocol` (`threads`, `batch`, `sample_size`,
+`includes_tokenization`) and sampled `p50_ms`, `p95_ms`, `n`.
+The shared protocol times warmed-up, batch-one raw-text-to-probabilities
+inference on a deterministic sample, normally one CPU thread. Per-row
+`latency_ms` remains a separate field and missing timing remains missing.
 
 ## Config: `configs/data.yaml`
 

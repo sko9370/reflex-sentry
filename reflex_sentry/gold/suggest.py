@@ -45,13 +45,6 @@ PRIOR_UNKNOWN = {label: 1.0 / len(ALL_GOLD_LABELS) for label in ALL_GOLD_LABELS}
 
 REC_COLUMNS = ("_rec_gold", "_rec_tags", "_rec_basis", "_rec_alt")
 
-DEFAULT_SHEETS = (
-    "data/gold/review/test_reviewed_partial.csv",
-    "data/gold/review/val_reviewed_partial.csv",
-    "data/gold/sheets/test_ood_opus_draft.csv",
-)
-
-
 def _is_blank(x) -> bool:
     return x is None or (isinstance(x, float) and math.isnan(x)) or str(x).strip() == ""
 
@@ -64,7 +57,7 @@ def _source_label_prior(x) -> tuple[str, dict]:
 
 
 def _tags_valid_for(gold: str, tags: str) -> bool:
-    """True if `tags` obeys the cat:*/hn:* gold-gating rules for `gold` (README section 1)."""
+    """True if `tags` obeys the cat:*/hn:* gold-gating rules for `gold` (configs/labeling_guide.md)."""
     parsed = split_tags(tags)
     if not parsed:
         return True
@@ -329,7 +322,7 @@ def print_summary(in_path: str, out_path: Path, out: pd.DataFrame) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sheets", nargs="+", default=list(DEFAULT_SHEETS))
+    ap.add_argument("--sheets", nargs="+", required=True, help="review sheets to annotate")
     ap.add_argument("--out-dir", default="data/gold/review")
     ap.add_argument("--sheets-dir", default="data/gold/sheets",
                      help="where to look for each split's {split}_opus_draft.csv, to spot human-filled rows")

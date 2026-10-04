@@ -18,8 +18,10 @@ Download convention: `hf download <hf_id> --repo-type dataset --local-dir data/r
   by human annotators, with a jailbreak flag).
 - Columns used: `user_input` -> text, `toxicity` (0/1) -> source_label, `jailbreaking` (0/1) ->
   is_adversarial. `source_category` is left null; toxic-chat doesn't carry a harm category.
-- This is the default `ood_source` (configs/data.yaml `split.ood_source`): held out entirely for
-  `test_ood_pool`, never used in train/val/test.
+- The committed `split.ood_sources` configuration holds this source out with
+  `aegis2`, `hh_redteam`, and `beavertails` for `test_ood_pool`; none of those
+  sources enter train/val/test in the base split. A later 300-row ordinary-benign
+  ToxicChat slice was appended to test separately, using source-derived labels.
 - Caveat: assumed column names from the dataset card; if the real parquet uses different names
   (e.g. a `conv_id`/`model_output` split), the loader raises a clear error listing the columns it
   actually found.
@@ -67,7 +69,7 @@ Download convention: `hf download <hf_id> --repo-type dataset --local-dir data/r
   attempt against the model was, not whether the opening request by itself is dangerous, benign, or
   ambiguous -- a skilled red-teamer's task_description can itself be describing a harmless-sounding
   opener that only turns adversarial several turns in. Since this project is single-turn only
-  (README 7), attaching a whole-transcript rating to just the first line would be a label leak in
+  (see [project status](../docs/STATUS.md)), attaching a whole-transcript rating to just the first line would be a label leak in
   one direction and noise in the other. `is_adversarial` is set to `True` unconditionally (every row
   here is, by construction, a red-team attempt), and `task_description` is kept as `source_category`
   for context. If you later want a derived label, the most defensible option is probably
@@ -97,9 +99,12 @@ Download convention: `hf download <hf_id> --repo-type dataset --local-dir data/r
   loader reports against the known subset sizes (80k / 1k / a few thousand toxic) after download.
 - `category` -> source_category.
 
-## hn_seed -- seeds/hard_negatives.csv (hand-written, committed by another agent)
+## hn_seed -- seeds/hard_negatives.csv (AI-assisted drafts)
 
 - Not downloaded; lives at `seeds/hard_negatives.csv` in this repo.
+- The starter corpus was drafted with AI assistance. The owner reviewed the
+  sampled gold items, including sampled seed rows; that is not evidence of a
+  row-by-row review of the entire seed file. See [seed provenance](../seeds/README.md).
 - Columns: `id, text, gold, tags, source, notes`. `gold` is always `"benign"` and `source` is
   always the literal string `"hn_seed"`.
 - The loader ignores the seed file's own `id` column and recomputes `id` via

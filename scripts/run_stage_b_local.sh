@@ -5,7 +5,7 @@ set -euo pipefail
 # Stage B checkpoint into models/stage_b (see notebooks/02_stage_b_train.ipynb
 # and its "Download your outputs" cell). This script exports the encoder to
 # ONNX, sweeps int8 quantization configs on the training dev fold (the same
-# held-out rows stage_b used for checkpoint selection -- README 4.1 reserves
+# held-out rows stage_b used for checkpoint selection -- docs/WORKFLOWS.md reserves
 # val for temperature scaling and threshold selection, never model-config
 # selection) at a matched escalation rate, and keeps the best passing one as
 # model_int8.onnx; writes an informational (non-gating) fp32-vs-int8 parity

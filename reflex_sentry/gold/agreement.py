@@ -1,4 +1,4 @@
-"""Pass-1 vs pass-2 self-agreement: relabel yourself a week later (README section 1).
+"""Pass-1 vs pass-2 self-agreement: relabel yourself a week later (docs/WORKFLOWS.md).
 
 `compare` reads two data/gold/<split>.csv-shaped files (the same ids labeled
 twice, e.g. by labeler_pass) and reports Cohen's kappa overall and per class,

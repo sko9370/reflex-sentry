@@ -1,4 +1,4 @@
-"""Batched teacher (guard-LLM) scorer for reflex-sentry (README 4.2, milestone 3).
+"""Batched teacher (guard-LLM) scorer for reflex-sentry (docs/WORKFLOWS.md).
 
 For each prompt, records the teacher's probability of the "unsafe" verdict
 read off the *first decision token's* distribution (a softmax restricted to
@@ -39,7 +39,7 @@ qwen3guard_gen_8b (Qwen/Qwen3Guard-Gen-8B)
     literal "Categories:" in a short greedy continuation, stored verbatim.
 
 Both presets store the raw teacher category string (not our own cat:*
-taxonomy) since the teacher's taxonomy is not README's; `targets.py` only
+taxonomy) since the teacher's taxonomy is not the project's; `targets.py` only
 uses the probabilities.
 
 Batching: left-padding puts every sequence's last real token in the last

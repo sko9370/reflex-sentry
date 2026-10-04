@@ -1,8 +1,7 @@
-"""Shared CPU latency protocol for reflex-sentry predictors (README 5.1 /
-5.4).
+"""Shared CPU latency protocol for reflex-sentry predictors (docs/WORKFLOWS.md).
 
 The comparison table's "CPU p50 ms" column is only meaningful if every row
-was measured the same way. The deployment framing (README 5.4) is a
+was measured the same way. The deployment framing in docs/WORKFLOWS.md is a
 single-core gate, batch size 1, end to end: raw text in, probabilities out.
 Concretely, every predictor that reports a latency number for that table
 (the keyword baseline, Stage A, Stage B, and the int8 ONNX export) measures
@@ -115,7 +114,7 @@ def summarize(latencies: Mapping[int, float] | Sequence[float]) -> dict:
 
 def write_sidecar(path: str | Path, latencies: Mapping[int, float] | Sequence[float], *, threads: int,
                    sample_size: int, batch: int = 1, includes_tokenization: bool = True) -> dict:
-    """Write the shared latency sidecar (README 5.4: `preds/<model>_latency.json`,
+    """Write the shared latency sidecar (docs/DATA_CONTRACT.md: `preds/<model>_latency.json`,
     not the logits CSV and not the training metadata.json) -- the protocol
     used plus p50/p95 of the sampled latencies. Returns the dict written."""
     payload = {

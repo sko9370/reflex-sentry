@@ -100,7 +100,7 @@ MIN_B32_RUN = 24
 # A couple of %XX escapes shows up in an ordinary pasted URL; a prompt built
 # mostly out of them is percent-encoding an instruction, not linking to one.
 MIN_PERCENT_ESCAPES = 6
-# Decode confirmation is optional (README-adjacent spec: "confirmed by
+# Decode confirmation is optional (the documented pre-check rule: "confirmed by
 # successful decode to mostly printable text" is a *strengthening* signal,
 # not a gate) -- an encoded blob that decodes to binary garbage is still
 # unreadable input and still gets escalated, it just doesn't get the
@@ -583,7 +583,7 @@ def _sample_oos_benign(interim_dir: Path, sources: Sequence, n: int, seed: int):
 # A simple, cheap stopword/script heuristic for the audit's diagnostic
 # language breakdown ONLY -- it is never used by any detector or by
 # precheck/apply_precheck, and its job is only to explain where
-# toxic_chat_ordinary_benign's flags come from (README section 1: this
+# toxic_chat_ordinary_benign's flags come from (docs/STATUS.md: this
 # project is English-only by scope, so non-English text is expected to look
 # "not natural-language" to detect_low_nl_ratio's English word list).
 _LANG_STOPWORDS = {

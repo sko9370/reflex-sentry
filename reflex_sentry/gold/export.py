@@ -7,7 +7,7 @@ project config:
     Excel/Sheets. Allowed values are listed in extra `_ref_*` columns at the
     far right so a spreadsheet's data-validation dropdown can point at them
     (Data > Data validation > list from a range).
-(b) a Label Studio JSON task list, plus `configs/label_studio.xml`: a single
+(b) a Label Studio JSON task list, plus generated `configs/label_studio.xml`: a single
     choice for `gold`, two conditional multi-selects for `cat:*` (shown only
     when gold=dangerous) and `hn:*` (shown only when gold=benign; ingest.py
     adds the `hard_negative` tag automatically whenever any hn:* is chosen,
@@ -67,6 +67,7 @@ def to_label_studio_tasks(sample: pd.DataFrame) -> list[dict]:
 
 
 def label_studio_xml() -> str:
+    """Canonical labeling interface; the XML output is generated, not tracked."""
     cat_choices = "\n".join(f'    <Choice value="{c}"/>' for c in CAT_TAGS)
     hn_choices = "\n".join(f'    <Choice value="{c}"/>' for c in HN_TAGS)
     return f"""<View>

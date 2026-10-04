@@ -1,4 +1,4 @@
-"""Tests for reflex_sentry/targets.py: the soft-target formula (README 4.3
+"""Tests for reflex_sentry/targets.py: the soft-target formula (reflex_sentry.targets
 plus the milestone-3 two-teacher and source-only extensions), checked
 against hand-computed values."""
 import sys

@@ -2,7 +2,7 @@
 
 Exact dedupe collapses rows whose normalized text is identical, even across
 sources, keeping one row per a configurable source preference order (e.g.
-hand-written hard negatives beat scraped copies of the same sentence).
+AI-drafted hard negatives beat scraped copies of the same sentence).
 
 Near-duplicate grouping uses MinHash over word shingles plus LSH banding, all
 implemented with numpy/hashlib (no new dependency): each surviving row gets a
