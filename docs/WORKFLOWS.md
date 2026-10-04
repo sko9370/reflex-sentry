@@ -99,6 +99,14 @@ python -m reflex_sentry.teacher.as_predictor \
   --eval data/processed/val.parquet --out preds/teacher_both_val.csv
 ```
 
+Scoring resumes only from a valid file; a nonempty file must identify the
+requested teacher.
+Input overlaps must have identical text; score-file overlaps passed to
+`teacher.merge_scores` must agree. A conflict is an error to investigate,
+not an instruction to discard one file. Use a separate output file when
+intentionally changing teacher settings. See the
+[teacher artifact contract](DATA_CONTRACT.md#teacher-score-artifacts).
+
 With soft targets built, train and score Stage A locally. Create the evasion
 split before asking a predictor to score it:
 
@@ -149,7 +157,10 @@ python -m reflex_sentry.eval.run_all --models stage_b_onnx \
 
 `--precheck` rebuilds `_pc` predictions after calibrating the base model.
 `--splits` limits requested output splits, while validation remains the
-calibration reference. To score a standalone probability CSV, provide its
+calibration reference. The runner requires processed gold matching the IDs
+and labels in each logits/prediction input, including validation references.
+After intentional label changes, rebuild stale prediction metadata from the
+authoritative split. To score a standalone probability CSV, provide its
 matching validation predictions:
 
 ```bash

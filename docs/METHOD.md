@@ -57,8 +57,10 @@ validation set, fp32 and int8 are calibrated and thresholded separately.
 
 ## Metrics and protocol
 
-The runner requires exact prediction IDs for each split, with no missing,
-extra, duplicate, or null IDs. A
+The shared runner requires exact prediction IDs and matching gold labels for
+each split, with no missing, extra, duplicate, or null IDs. It checks raw
+logits against processed gold before calibration as well. Standalone file-only
+report/calibration commands have no processed reference for this comparison. A
 prediction row has `id`, `gold`, `p_safe`, `p_dangerous`, `p_unsure`; optional
 fields include `source`, `tags`, `latency_ms`, `force_escalate`,
 `precheck_flag`, and `precheck_reasons`. Probabilities sum to one within

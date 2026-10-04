@@ -229,3 +229,7 @@ model identity, conflicting IDs, score ranges, and complete batch output; curve
 computation optimization; new inference packaging; and research work on OOD recall,
 ambiguity, false positives, and independent holdouts. They warrant their own tests
 and decisions, and must not be smuggled into a behavior-preserving refactor.
+
+The teacher resume/merge validation and evaluation gold-consistency follow-ups
+were subsequently implemented as a separate change; see [STATUS.md](STATUS.md)
+for validation results and [DATA_CONTRACT.md](DATA_CONTRACT.md) for their scope.

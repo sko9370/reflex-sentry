@@ -152,7 +152,40 @@ include `source, tags, latency_ms, force_escalate, precheck_flag,
 precheck_reasons`. `id` for a wrapped variant is
 `<pool id>__<wrapper name>` (see `reflex_sentry/eval/wrappers.py`).
 
-### Student logits and timing sidecars
+The shared `eval.run_all` runner checks each prediction's `id` and `gold`
+against the processed split, joining by ID rather than row order. Missing,
+extra, duplicate, or null IDs and mismatched or invalid labels are errors.
+This includes validation predictions used only as a threshold reference.
+Raw logits are checked before temperature fitting or calibrated files are
+written, including validation logits when `val` is omitted from `--splits`.
+The corresponding processed gold file must exist for these checks.
+Standalone `eval.report` and `eval.calibrate` accept files without a processed
+gold reference; they do not perform this cross-file consistency check.
+
+## Teacher score artifacts
+
+Teacher scoring and merging require `id`, `p_unsafe_teacher`, and
+`teacher_model`. IDs must be nonblank and unique within each saved file;
+one nonblank model identity must describe all rows. Unsafe probabilities must
+be finite numeric values in `[0, 1]`. Optional `p_controversial` may be missing
+or null for teachers without that verdict, but present values must also be
+finite and in `[0, 1]`. Category and raw-response fields are optional.
+
+Resumption validates the existing file and requires its model identity to
+match the requested teacher. It may retain previously scored IDs outside the
+current input subset. Overlapping input pools may repeat an ID only with the
+same text. A scorer must return exactly one valid result per requested input;
+invalid batches are rejected before checkpointing them.
+
+`teacher.merge_scores` accepts overlaps across files only when their unsafe
+scores and all other populated fields agree. A missing optional value may be
+filled from another file; two populated values must match. Conflicting
+overlaps and mixed model identities are rejected instead of
+silently keeping the first row. Existing artifacts do not record prompt-text
+fingerprints or checkpoint settings, so these checks cannot prove that those
+settings were unchanged between runs.
+
+## Student logits and timing sidecars
 
 Student predictors first write `preds/<model>_<split>_logits.csv` with
 `id`, `gold`, raw `logit_safe`, `logit_dangerous`, `logit_unsure` in that
