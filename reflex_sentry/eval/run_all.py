@@ -76,31 +76,49 @@ def score_keyword(processed_dir: Path, preds_dir: Path, rules_path: str,
 
 # ------------------------------------------------------------------- (b) ---
 
-def calibrate_model(model: str, preds_dir: Path, splits: Sequence[str] = SPLITS) -> bool:
+def calibrate_model(model: str, preds_dir: Path, splits: Sequence[str] = SPLITS,
+                    processed_dir: Path | str = DEFAULT_PROCESSED_DIR) -> bool:
     """Fit temperature on this model's val logits and apply it to every
     split's logits file found. Returns True if calibration ran."""
     val_logits_path = preds_dir / f"{model}_val_logits.csv"
     if not val_logits_path.exists():
         return False
-    val_df = pd.read_csv(val_logits_path)
+    processed_dir = Path(processed_dir)
+    val_df = pd.read_csv(val_logits_path, dtype={"id": "string", "gold": "string"})
+    _validate_gold_rows(processed_dir / "val.parquet", val_logits_path, val_df)
     y = val_df["gold"].map(C.GOLD_TO_CLASS)
-    if y.isna().any() or y.empty:
-        return False
-    T = C.fit_temperature(val_df[C.LOGIT_COLS].to_numpy(dtype=float), y.to_numpy(dtype=int))
+    if y.empty:
+        raise ValueError(f"{val_logits_path} contains no validation rows")
+    # Validate all inputs before fitting or writing any calibrated CSV.
+    to_apply = []
     for split in dict.fromkeys(("val", *splits)):
         logits_path = preds_dir / f"{model}_{split}_logits.csv"
         if not logits_path.exists():
             continue
-        df = pd.read_csv(logits_path)
+        df = val_df if split == "val" else pd.read_csv(
+            logits_path, dtype={"id": "string", "gold": "string"})
+        if split != "val":
+            _validate_gold_rows(processed_dir / f"{split}.parquet", logits_path, df)
+        to_apply.append((split, df))
+    T = C.fit_temperature(val_df[C.LOGIT_COLS].to_numpy(dtype=float), y.to_numpy(dtype=int))
+    for split, df in to_apply:
         C.to_predictions(df, T).to_csv(preds_dir / f"{model}_{split}.csv", index=False)
     return True
 
 
-def _validate_prediction_ids(gold_path: Path, preds_path: Path) -> None:
-    """Require one prediction for every gold row in the same split."""
-    gold_ids = pd.read_parquet(gold_path, columns=["id"])["id"]
-    pred_ids = pd.read_csv(preds_path, usecols=["id"], dtype={"id": "string"})["id"]
-    gold_ids = gold_ids.astype("string")
+def _validate_gold_rows(gold_path: Path, preds_path: Path,
+                        preds: pd.DataFrame | None = None) -> None:
+    """Require a complete ID-to-gold match against the processed split."""
+    if not gold_path.exists():
+        raise ValueError(f"cannot validate {preds_path}: processed gold file {gold_path} is missing")
+    gold = pd.read_parquet(gold_path)
+    if preds is None:
+        preds = pd.read_csv(preds_path, dtype={"id": "string", "gold": "string"})
+    for label, path, frame in (("processed gold", gold_path, gold),
+                               ("predictions", preds_path, preds)):
+        if "id" not in frame.columns:
+            raise ValueError(f"{label} in {path} is missing id column")
+    gold_ids, pred_ids = gold["id"].astype("string"), preds["id"].astype("string")
     for label, path, ids in (("gold", gold_path, gold_ids), ("predictions", preds_path, pred_ids)):
         if ids.isna().any():
             raise ValueError(f"{label} in {path} contain null IDs")
@@ -110,6 +128,18 @@ def _validate_prediction_ids(gold_path: Path, preds_path: Path) -> None:
     extra = len(set(pred_ids) - set(gold_ids))
     if missing or extra:
         raise ValueError(f"{preds_path} IDs do not match {gold_path}: {missing} missing, {extra} extra")
+    for label, path, frame in (("processed gold", gold_path, gold),
+                               ("predictions", preds_path, preds)):
+        if "gold" not in frame.columns:
+            raise ValueError(f"{label} in {path} is missing gold column")
+        invalid = (~frame["gold"].astype("string").isin(C.GOLD_TO_CLASS)).sum()
+        if invalid:
+            raise ValueError(f"{label} in {path} contains {invalid} null or invalid gold labels")
+    expected = pd.Series(gold["gold"].astype("string").to_numpy(), index=gold_ids.to_numpy())
+    actual = pd.Series(preds["gold"].astype("string").to_numpy(), index=pred_ids.to_numpy())
+    mismatches = int((actual != expected.reindex(actual.index)).sum())
+    if mismatches:
+        raise ValueError(f"{preds_path} gold labels do not match {gold_path}: {mismatches} mismatched IDs")
 
 
 def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: Path,
@@ -122,6 +152,8 @@ def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: 
         gold_path = processed_dir / f"{split}.parquet"
         preds_path = preds_dir / f"{model}_{split}.csv"
         out_dir = reports_dir / f"{model}_{split}"
+        if split in splits and preds_path.exists() and not gold_path.exists():
+            raise ValueError(f"cannot validate {preds_path}: processed gold file {gold_path} is missing")
         if split not in splits or not gold_path.exists() or not preds_path.exists():
             # A previous invocation may have reported this split. Its metrics
             # cannot describe the model/split set requested in this run.
@@ -132,10 +164,9 @@ def report_model(model: str, processed_dir: Path, preds_dir: Path, reports_dir: 
     # predictions used only to select the threshold for another split.
     if reportable and val_arg and not any(split == "val" for split, *_ in reportable):
         val_gold = processed_dir / "val.parquet"
-        if val_gold.exists():
-            _validate_prediction_ids(val_gold, val_preds)
+        _validate_gold_rows(val_gold, val_preds)
     for _, gold_path, preds_path, _ in reportable:
-        _validate_prediction_ids(gold_path, preds_path)
+        _validate_gold_rows(gold_path, preds_path)
     for split, _, preds_path, out_dir in reportable:
         results[split] = R.run(str(preds_path), str(out_dir), val=val_arg, config=config)
     return results
@@ -258,7 +289,7 @@ def run(models: list[str], processed_dir: str | Path = DEFAULT_PROCESSED_DIR,
     for model in models:
         if model == "keyword":
             score_keyword(processed_dir, preds_dir, keyword_rules_path, selected_splits)
-        calibrate_model(model, preds_dir, selected_splits)
+        calibrate_model(model, preds_dir, selected_splits, processed_dir)
         report_model(model, processed_dir, preds_dir, reports_dir, config, selected_splits)
         if precheck:
             from ..models import precheck as PC

@@ -389,20 +389,51 @@ def read_any(path: str) -> pd.DataFrame:
 
 
 def load_and_dedupe_inputs(input_paths: Sequence[str]) -> pd.DataFrame:
-    """Concatenate the input pools and dedupe by id (first occurrence wins),
-    since the same id can legitimately appear in more than one pool file
-    only by mistake -- this keeps the scorer idempotent either way."""
+    """Combine pools, allowing only identical overlaps of the same id."""
+    from .artifact import nonblank_string
+
     frames = []
     for p in input_paths:
         df = read_any(p)
         missing = {"id", "text"} - set(df.columns)
         if missing:
             raise ValueError(f"{p} missing required column(s): {sorted(missing)}")
+        if not df["id"].map(nonblank_string).all():
+            raise ValueError(f"{p} contains null or blank id")
+        if not df["text"].map(nonblank_string).all():
+            raise ValueError(f"{p} contains null or blank text")
         frames.append(df[["id", "text"]])
     if not frames:
         return pd.DataFrame(columns=["id", "text"])
     combined = pd.concat(frames, ignore_index=True)
+    if combined.groupby("id")["text"].nunique().gt(1).any():
+        raise ValueError("input pools contain conflicting text for the same id")
     return combined.drop_duplicates(subset="id", keep="first").reset_index(drop=True)
+
+
+def _prepare_run(input_paths, out_path, teacher_model, batch_size, limit, checkpoint_every):
+    from .artifact import nonblank_string, validate_score_frame
+
+    if not nonblank_string(teacher_model):
+        raise ValueError("teacher_model must be a nonblank string")
+    for name, value in (("batch_size", batch_size), ("checkpoint_every", checkpoint_every)):
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if limit is not None and (type(limit) is not int or limit < 0):
+        raise ValueError("limit must be a nonnegative integer")
+
+    todo = load_and_dedupe_inputs(input_paths)
+    if limit is not None:
+        todo = todo.head(limit)
+    out_file = Path(out_path)
+    done = None
+    if out_file.exists():
+        done = pd.read_parquet(out_file)
+        actual_model = validate_score_frame(done, str(out_file))
+        if actual_model is not None and actual_model != teacher_model:
+            raise ValueError(f"{out_file} teacher_model {actual_model!r} does not match {teacher_model!r}")
+        todo = todo[~todo["id"].isin(set(done["id"]))].reset_index(drop=True)
+    return todo, done, out_file
 
 
 def run_scorer(
@@ -419,17 +450,17 @@ def run_scorer(
     to `out_path` every `checkpoint_every` batches and once more at the end.
     Returns the full resulting DataFrame (previously scored + newly scored).
     """
-    todo = load_and_dedupe_inputs(input_paths)
-    if limit is not None:
-        todo = todo.head(limit)
+    prepared = _prepare_run(
+        input_paths, out_path, teacher_model, batch_size, limit, checkpoint_every
+    )
+    return _run_prepared(score_fn, prepared, teacher_model, batch_size, checkpoint_every)
 
-    out_file = Path(out_path)
-    if out_file.exists():
-        done = pd.read_parquet(out_file)
-        todo = todo[~todo["id"].isin(set(done["id"]))].reset_index(drop=True)
-    else:
-        done = None
 
+def _run_prepared(score_fn, prepared, teacher_model, batch_size, checkpoint_every):
+    """Execute a validated run, including its periodic checkpoints."""
+    from .artifact import valid_probability
+
+    todo, done, out_file = prepared
     new_rows: list[dict] = []
 
     def _flush():
@@ -445,8 +476,15 @@ def run_scorer(
     for start in range(0, len(todo), batch_size):
         batch = todo.iloc[start:start + batch_size]
         scored = score_fn(batch["text"].tolist())
+        if not isinstance(scored, (list, tuple)) or len(scored) != len(batch):
+            raise ValueError("score_fn must return exactly one result per batch input")
+        batch_rows = []
         for id_, s in zip(batch["id"].tolist(), scored):
-            new_rows.append({
+            if not isinstance(s, dict) or not valid_probability(s.get("p_unsafe_teacher")):
+                raise ValueError("score_fn returned invalid p_unsafe_teacher")
+            if not valid_probability(s.get("p_controversial", np.nan), optional=True):
+                raise ValueError("score_fn returned invalid p_controversial")
+            batch_rows.append({
                 "id": id_,
                 "p_unsafe_teacher": s["p_unsafe_teacher"],
                 "p_controversial": s.get("p_controversial", np.nan),
@@ -454,6 +492,7 @@ def run_scorer(
                 "teacher_raw": s.get("teacher_raw", ""),
                 "teacher_model": teacher_model,
             })
+        new_rows.extend(batch_rows)
         n_batches += 1
         if n_batches % checkpoint_every == 0:
             _flush()
@@ -478,6 +517,13 @@ def main() -> None:
     ap.add_argument("--checkpoint-every", type=int, default=10, help="batches between writes to --out")
     a = ap.parse_args()
 
+    prepared = _prepare_run(a.inputs, a.out, a.model, a.batch_size, a.limit, a.checkpoint_every)
+    if prepared[0].empty:
+        if prepared[1] is None:
+            print(f"no teacher scores to write to {a.out}")
+        else:
+            print(f"no new teacher scores; {len(prepared[1])} already in {a.out}")
+        return
     preset = PRESETS[a.model]
     model, tokenizer = load_model_and_tokenizer(preset, load_in_4bit=a.load_in_4bit, device_map=a.device_map)
     score_fn = score_fn_for_preset(a.model, model, tokenizer, max_length=a.max_length)
@@ -486,10 +532,7 @@ def main() -> None:
         preview = score_fn(["How do I check what ports are open on my own server?"])
         print(f"[reflex_sentry.teacher.score] smoke preview for {a.model}: {preview}")
 
-    df = run_scorer(
-        score_fn, a.inputs, a.out, teacher_model=a.model,
-        batch_size=a.batch_size, limit=a.limit, checkpoint_every=a.checkpoint_every,
-    )
+    df = _run_prepared(score_fn, prepared, a.model, a.batch_size, a.checkpoint_every)
     print(f"wrote {len(df)} teacher scores to {a.out}")
 
 

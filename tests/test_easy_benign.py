@@ -126,13 +126,13 @@ def test_append_idempotent_and_backup(tmp_path):
 
 
 def test_merge_scores(tmp_path):
-    a = pd.DataFrame({"id": ["x", "y"], "p_unsafe_teacher": [0.1, 0.2]})
-    b = pd.DataFrame({"id": ["y", "z"], "p_unsafe_teacher": [0.9, 0.3]})
+    a = pd.DataFrame({"id": ["x", "y"], "p_unsafe_teacher": [0.1, 0.2], "teacher_model": ["fake", "fake"]})
+    b = pd.DataFrame({"id": ["y", "z"], "p_unsafe_teacher": [0.2, 0.3], "teacher_model": ["fake", "fake"]})
     a.to_parquet(tmp_path / "a.parquet", index=False)
     b.to_parquet(tmp_path / "b.parquet", index=False)
     m = merge_scores([str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")])
     assert m["id"].tolist() == ["x", "y", "z"]
-    assert m.set_index("id").loc["y", "p_unsafe_teacher"] == 0.2  # first file wins
+    assert m.set_index("id").loc["y", "p_unsafe_teacher"] == 0.2
 
 
 def test_easy_benign_makes_reweighting_branch_apply(tmp_path):

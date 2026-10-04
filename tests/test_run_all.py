@@ -243,6 +243,110 @@ def test_report_model_checks_threshold_only_val_ids(workspace):
     assert not (workspace["reports"] / "toy_test").exists()
 
 
+def _prediction_rows(gold: pd.DataFrame) -> pd.DataFrame:
+    preds = gold[["id", "gold", "tags", "source"]].copy()
+    preds["p_safe"] = 0.7
+    preds["p_dangerous"] = 0.2
+    preds["p_unsure"] = 0.1
+    return preds
+
+
+def test_report_model_rejects_changed_gold_with_matching_ids(workspace):
+    gold = pd.read_parquet(workspace["processed"] / "test.parquet")
+    preds = _prediction_rows(gold)
+    preds.loc[0, "gold"] = "benign" if preds.loc[0, "gold"] != "benign" else "dangerous"
+    path = workspace["preds"] / "toy_test.csv"
+    preds.to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="1 mismatched IDs") as error:
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test"])
+    assert str(path) in str(error.value)
+    assert not (workspace["reports"] / "toy_test").exists()
+
+
+def test_report_model_rejects_threshold_only_val_gold_mismatch(workspace):
+    val = pd.read_parquet(workspace["processed"] / "val.parquet")
+    test = pd.read_parquet(workspace["processed"] / "test.parquet")
+    val_preds = _prediction_rows(val)
+    val_preds.loc[0, "gold"] = "benign" if val_preds.loc[0, "gold"] != "benign" else "dangerous"
+    val_preds.to_csv(workspace["preds"] / "toy_val.csv", index=False)
+    _prediction_rows(test).to_csv(workspace["preds"] / "toy_test.csv", index=False)
+
+    with pytest.raises(ValueError, match="1 mismatched IDs"):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test"])
+    assert not (workspace["reports"] / "toy_test").exists()
+
+
+def test_report_model_requires_processed_val_for_threshold_source(workspace):
+    val = pd.read_parquet(workspace["processed"] / "val.parquet")
+    test = pd.read_parquet(workspace["processed"] / "test.parquet")
+    _prediction_rows(val).to_csv(workspace["preds"] / "toy_val.csv", index=False)
+    _prediction_rows(test).to_csv(workspace["preds"] / "toy_test.csv", index=False)
+    (workspace["processed"] / "val.parquet").unlink()
+
+    with pytest.raises(ValueError, match="processed gold file .*val.parquet is missing"):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test"])
+    assert not (workspace["reports"] / "toy_test").exists()
+
+
+def test_report_model_rejects_missing_selected_gold(workspace):
+    _prediction_rows(make_gold(6, 3, "ood")).to_csv(
+        workspace["preds"] / "toy_test_ood.csv", index=False)
+
+    with pytest.raises(ValueError, match="processed gold file .*test_ood.parquet is missing"):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test_ood"])
+
+
+@pytest.mark.parametrize("problem,expected", [
+    ("missing", "missing gold column"),
+    ("null", "1 null or invalid gold labels"),
+    ("invalid", "1 null or invalid gold labels"),
+])
+def test_report_model_rejects_malformed_prediction_gold(workspace, problem, expected):
+    gold = pd.read_parquet(workspace["processed"] / "test.parquet")
+    preds = _prediction_rows(gold)
+    if problem == "missing":
+        preds = preds.drop(columns="gold")
+    else:
+        preds.loc[0, "gold"] = None if problem == "null" else "unknown"
+    preds.to_csv(workspace["preds"] / "toy_test.csv", index=False)
+
+    with pytest.raises(ValueError, match=expected):
+        RA.report_model("toy", workspace["processed"], workspace["preds"],
+                        workspace["reports"], config=None, splits=["test"])
+
+
+def test_report_model_accepts_reordered_matching_gold(workspace, monkeypatch):
+    gold = pd.read_parquet(workspace["processed"] / "test.parquet")
+    _prediction_rows(gold).iloc[::-1].to_csv(workspace["preds"] / "toy_test.csv", index=False)
+    calls = []
+    monkeypatch.setattr(RA.R, "run", lambda *args, **kwargs: calls.append(args) or {"ok": True})
+
+    result = RA.report_model("toy", workspace["processed"], workspace["preds"],
+                             workspace["reports"], config=None, splits=["test"])
+    assert result == {"test": {"ok": True}}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("bad_split", ["val", "test"])
+def test_calibrate_rejects_gold_mismatch_before_fit_or_write(workspace, monkeypatch, bad_split):
+    for split, seed in (("val", 70), ("test", 71)):
+        logits = _make_logits(6, seed, split)
+        if split == bad_split:
+            logits.loc[0, "gold"] = "benign" if logits.loc[0, "gold"] != "benign" else "dangerous"
+        logits.to_csv(workspace["preds"] / f"toy_{split}_logits.csv", index=False)
+    monkeypatch.setattr(RA.C, "fit_temperature", lambda *args: pytest.fail("temperature was fitted"))
+
+    with pytest.raises(ValueError, match="1 mismatched IDs"):
+        RA.calibrate_model("toy", workspace["preds"], ("test",), workspace["processed"])
+    assert not (workspace["preds"] / "toy_val.csv").exists()
+    assert not (workspace["preds"] / "toy_test.csv").exists()
+
+
 def test_run_all_precheck_uses_fresh_calibrated_predictions(workspace, monkeypatch):
     for split, seed in (("val", 30), ("test", 31)):
         _make_logits(6, seed, split).to_csv(workspace["preds"] / f"stage_b_{split}_logits.csv", index=False)

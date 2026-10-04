@@ -126,7 +126,7 @@ def test_parse_qwen_guard_category_absent():
 
 def test_load_and_dedupe_inputs_dedupes_across_files(tmp_path):
     a = pd.DataFrame({"id": ["x:1", "x:2"], "text": ["hello", "world"], "source": ["s", "s"]})
-    b = pd.DataFrame({"id": ["x:2", "x:3"], "text": ["world-dupe", "third"], "source": ["s", "s"]})
+    b = pd.DataFrame({"id": ["x:2", "x:3"], "text": ["world", "third"], "source": ["s", "s"]})
     pa, pb = tmp_path / "a.parquet", tmp_path / "b.parquet"
     a.to_parquet(pa)
     b.to_parquet(pb)
